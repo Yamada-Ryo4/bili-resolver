@@ -262,7 +262,7 @@ const UI = (host) => `
             <div id="historyList" class="space-y-2"></div>
         </div>
 
-        <p class="text-center text-[10px] text-slate-600 mt-4">VRChat 直链: ${host}/live/房间号</p>
+        <p class="text-center text-[10px] text-slate-600 mt-4"></p>
     </div>
 
     <div id="toast" class="toast">消息</div>
