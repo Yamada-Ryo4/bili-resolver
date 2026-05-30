@@ -16,6 +16,54 @@ const ERROR_MAP = {
     '-10403': '仅限港澳台地区', '62002': '视频不可见', '62004': '审核中'
 };
 
+// --- 反爬错误 ---
+// 统一的中文反爬提示，供视频解析链路在识别风控时返回给前端。
+const ANTI_CRAWL_MSG = 'B 站风控拦截，请稍后重试';
+
+// 哨兵错误类型：上层可通过 `instanceof AntiCrawlError` 或 `err.name === 'AntiCrawlError'`
+// 识别反爬失败，而无需依赖脆弱的字符串匹配。
+class AntiCrawlError extends Error {
+    constructor(message = ANTI_CRAWL_MSG) {
+        super(message);
+        this.name = 'AntiCrawlError';
+    }
+}
+
+// --- 安全 JSON 抓取助手 ---
+// 集中完成「状态码检查 → Content-Type / body 嗅探 → JSON 解析 → code:-352 识别」，
+// 识别到反爬时抛出带哨兵标记的 AntiCrawlError（中文消息），绝不让原始的
+// `Unexpected token` / `is not valid JSON` 解析错误泄漏到上层。
+// 注意：非 -352 的业务码（如 -404）不在此处理，原样返回交由调用点既有 ERROR_MAP 逻辑（保证 Preservation）。
+async function fetchBiliJson(url, options) {
+    const res = await fetch(url, options);
+
+    // 1) 非 2xx 视为反爬 / 异常。
+    if (!res.ok) throw new AntiCrawlError();
+
+    // 2) body 只消费一次，统一按文本读取后再解析。
+    const text = await res.text();
+
+    // 3) Content-Type 非 JSON，或 body 以 '<' 开头（HTML / DOCTYPE 风控页）→ 反爬。
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json') || text.trim().startsWith('<')) {
+        throw new AntiCrawlError();
+    }
+
+    // 4) JSON 解析失败（避免原始 SyntaxError 泄漏）→ 反爬。
+    let json;
+    try {
+        json = JSON.parse(text);
+    } catch (e) {
+        throw new AntiCrawlError();
+    }
+
+    // 5) 风控校验失败码 → 反爬。
+    if (json.code === -352) throw new AntiCrawlError();
+
+    // 6) 其余（含其它业务码）原样返回。
+    return json;
+}
+
 // --- Buvid ---
 async function getBuvid() {
     try {
@@ -25,6 +73,57 @@ async function getBuvid() {
     } catch (e) { return "FE6D3664-927F-F75B-B7D4-733E5D4B263F69428infoc"; }
 }
 
+// --- 反爬 Cookie 采集 ---
+// 同 getBuvid() 的硬编码回退 buvid3，确保 finger/spi 失败时 Cookie 至少含 buvid3。
+const FALLBACK_BUVID3 = "FE6D3664-927F-F75B-B7D4-733E5D4B263F69428infoc";
+
+// 自包含的 HMAC-SHA256 hex 计算（走原生 WebCrypto crypto.subtle），用于生成
+// bili_ticket 所需的 hexsign。key = 'XgwSnGZ1p'，message = 'ts' + ts。
+async function hmacSha256Hex(key, message) {
+    const enc = new TextEncoder();
+    const cryptoKey = await crypto.subtle.importKey(
+        'raw', enc.encode(key), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']
+    );
+    const sig = await crypto.subtle.sign('HMAC', cryptoKey, enc.encode(message));
+    return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// 采集降低风控概率的反爬 Cookie：
+//   1) finger/spi -> buvid3 (b_3) / buvid4 (b_4)；失败则回退到硬编码 buvid3 常量。
+//   2) 可选叠加 bili_ticket（HMAC-SHA256 + GenWebTicket），整段 try/catch 降级，
+//      任何失败都不阻断主流程，退化为仅 buvid3/buvid4。
+//   3) 拼接 Cookie 字符串（缺失项跳过）；buvid3 始终存在。
+// getBuvid() 的签名与回退常量保持不变（直播链路继续使用）。
+async function getAntiCrawlCookie() {
+    let buvid3 = FALLBACK_BUVID3;
+    let buvid4 = null;
+
+    // 1) finger/spi -> b_3 / b_4
+    try {
+        const res = await fetch("https://api.bilibili.com/x/frontend/finger/spi", { headers: { "User-Agent": UA } });
+        const json = await res.json();
+        if (json.data?.b_3) buvid3 = json.data.b_3;
+        if (json.data?.b_4) buvid4 = json.data.b_4;
+    } catch (e) { /* 保留 fallback buvid3 */ }
+
+    // 2) 可选 bili_ticket（任何失败都优雅降级）
+    let ticket = null;
+    try {
+        const ts = Math.floor(Date.now() / 1000);
+        const hexsign = await hmacSha256Hex('XgwSnGZ1p', 'ts' + ts);
+        const ticketUrl = `https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket?key_id=ec02&hexsign=${hexsign}&context[ts]=${ts}&csrf=`;
+        const res = await fetch(ticketUrl, { method: 'POST', headers: { "User-Agent": UA } });
+        const json = await res.json();
+        if (json.data?.ticket) ticket = json.data.ticket;
+    } catch (e) { /* 降级为仅 buvid3 / buvid4 */ }
+
+    // 3) 拼接 Cookie（缺失项跳过；buvid3 始终存在）
+    const parts = [`buvid3=${buvid3}`];
+    if (buvid4) parts.push(`buvid4=${buvid4}`);
+    if (ticket) parts.push(`bili_ticket=${ticket}`);
+    return parts.join('; ');
+}
+
 // --- WBI 签名 ---
 const mixinKeyEncTab = [46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52];
 const getMixinKey = (orig) => mixinKeyEncTab.map(n => orig[n]).join('').slice(0, 32);
@@ -32,42 +131,81 @@ async function md5(text) {
     const hashBuffer = await crypto.subtle.digest('MD5', new TextEncoder().encode(text));
     return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
-async function signWbi(params) {
-    const res = await fetch("https://api.bilibili.com/x/web-interface/nav", { headers: { "User-Agent": UA } });
-    const json = await res.json();
+// 从 nav 接口取 wbi_img 并派生 mixin_key。
+// 走 fetchBiliJson（注入 User-Agent / Referer / Cookie），识别到反爬时抛 AntiCrawlError，
+// 而非对 HTML 风控页调 .json() 抛出原始 `Unexpected token`。
+// 对合法 nav 数据，mixin_key 的派生（getMixinKey over img_url/sub_url basenames）与改造前完全一致。
+// 拆出此函数是为了让单次解析内只取一次 nav：getPlayUrlWithFallback 的 fallback 循环
+// 可复用缓存的 mixin_key，而不必每个清晰度都重新请求 nav。
+async function getMixinKeyFromNav(cookie) {
+    const json = await fetchBiliJson("https://api.bilibili.com/x/web-interface/nav", {
+        headers: { 'User-Agent': UA, 'Referer': REFERER, 'Cookie': cookie }
+    });
     const { img_url, sub_url } = json.data.wbi_img;
-    const mixin_key = getMixinKey(img_url.split('/').pop().split('.')[0] + sub_url.split('/').pop().split('.')[0]);
+    return getMixinKey(img_url.split('/').pop().split('.')[0] + sub_url.split('/').pop().split('.')[0]);
+}
+
+// WBI 签名。
+// - 若传入预先计算好的 `mixinKey`，直接使用（不再请求 nav）；
+// - 否则通过 getMixinKeyFromNav(cookie) 取一次（cookie 可为 undefined，向后兼容 signWbi(params)）。
+// 对合法 nav 数据，签名输出（query + w_rid）与改造前逐字节一致：mixin_key 派生、wts、
+// 参数排序、md5(query + mixin_key) 的逻辑均未改变，只有「取 nav 的方式」与「nav 缓存拆分」发生变化。
+async function signWbi(params, cookie, mixinKey) {
+    const mixin_key = mixinKey !== undefined ? mixinKey : await getMixinKeyFromNav(cookie);
     const curr_params = { ...params, wts: Math.floor(Date.now() / 1000) };
     const query = Object.keys(curr_params).sort().map(k => `${k}=${encodeURIComponent(curr_params[k])}`).join('&');
     return query + `&w_rid=${await md5(query + mixin_key)}`;
 }
 
 // --- 视频解析 (原版) ---
-async function getPlayUrlWithFallback(bvid, cid, targetQn) {
+// 走 fetchBiliJson 取 playurl（注入 Cookie），并支持下传单次解析内缓存的 mixin_key。
+// - nav（mixin_key）在整个 fallback 循环中只取一次：若调用方未传入 mixinKey，则在进入循环
+//   前用 getMixinKeyFromNav(cookie) 计算一次；nav 若为反爬响应，AntiCrawlError 会直接抛出本函数
+//   （不吞掉），避免对每个清晰度重复请求 nav 放大风控。
+// - 关键：quality 循环的 catch 中若捕获到 AntiCrawlError，立即 throw 终止 fallback
+//   （重试只会放大风控）；非反爬的业务失败仍按原逻辑记录 lastError 并回退下一档。
+// - Preservation：成功返回 { url, quality } 的结构、普通业务失败（code!=0 / 缺 durl）逐档回退、
+//   qualities 列表计算与最终 throw new Error(lastError || ...) 均与改造前一致。
+async function getPlayUrlWithFallback(bvid, cid, targetQn, cookie, mixinKey) {
     const qualities = [targetQn, 80, 64, 32].filter((v, i, a) => a.indexOf(v) === i && v <= targetQn);
+    // 单次解析内只取一次 nav：缺省则计算一次并在循环内复用（nav 反爬时直接抛出）。
+    const mixin_key = mixinKey !== undefined ? mixinKey : await getMixinKeyFromNav(cookie);
     let lastError = null;
     for (const qn of qualities) {
         try {
-            const signedQuery = await signWbi({ bvid, cid, qn: qn, fnval: 1 });
-            const pRes = await fetch(`https://api.bilibili.com/x/player/wbi/playurl?${signedQuery}`, {
-                headers: { 'User-Agent': UA, 'Referer': REFERER }
+            const signedQuery = await signWbi({ bvid, cid, qn: qn, fnval: 1 }, cookie, mixin_key);
+            const pData = await fetchBiliJson(`https://api.bilibili.com/x/player/wbi/playurl?${signedQuery}`, {
+                headers: { 'User-Agent': UA, 'Referer': REFERER, 'Cookie': cookie }
             });
-            const pData = await pRes.json();
             if (pData.code === 0 && pData.data.durl?.[0]) {
                 return { url: pData.data.durl[0].url, quality: pData.data.quality };
             } else { lastError = pData.message || ERROR_MAP[pData.code]; }
-        } catch (e) { lastError = e.message; }
+        } catch (e) {
+            // 反爬：立即中止 fallback 并向上抛出（重试只会放大风控）。
+            if (e instanceof AntiCrawlError || e.name === 'AntiCrawlError') throw e;
+            // 非反爬业务失败：记录并回退下一档（行为不变）。
+            lastError = e.message;
+        }
     }
     throw new Error(lastError || "视频解析失败");
 }
 
+// 单次解析内只采集一次反爬 Cookie（finger/spi 仅请求一次），并将 Cookie 注入
+// view / nav / playurl 三个请求。view 走 fetchBiliJson（识别反爬抛 AntiCrawlError，
+// 不再对 HTML 风控页调 .json() 泄漏 `Unexpected token`）。
+// 顺序保留：先 view，view 业务码检查通过后再取一次 nav（mixin_key），最后 playurl。
+// 这样 view 的反爬/业务错误会在任何 nav 请求之前短路，且 nav 在单次解析内只取一次。
 async function resolveVideo(bvid, qn, host) {
-    const vRes = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { headers: { 'User-Agent': UA } });
-    const vData = await vRes.json();
+    const cookie = await getAntiCrawlCookie();
+
+    const vData = await fetchBiliJson(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
+        headers: { 'User-Agent': UA, 'Referer': REFERER, 'Cookie': cookie }
+    });
     if (vData.code !== 0) throw new Error(ERROR_MAP[vData.code] || vData.message);
 
     const { cid, title, pic, owner } = vData.data;
-    const videoStream = await getPlayUrlWithFallback(bvid, cid, qn || 116);
+    const mixinKey = await getMixinKeyFromNav(cookie);
+    const videoStream = await getPlayUrlWithFallback(bvid, cid, qn || 116, cookie, mixinKey);
 
     const playableUrl = `${host}/proxy?url=${encodeURIComponent(videoStream.url)}&name=${encodeURIComponent(title)}`;
     const downloadUrl = `${playableUrl}&dl=1`;
@@ -504,7 +642,9 @@ export default {
                 }
                 return response;
             } catch (e) {
-                return new Response(JSON.stringify({ status: 'error', message: e.message }), {
+                // 反爬异常统一映射为中文提示；其它异常保留原 message（如 ERROR_MAP 业务码错误）。
+                const message = (e instanceof AntiCrawlError || e.name === 'AntiCrawlError') ? ANTI_CRAWL_MSG : e.message;
+                return new Response(JSON.stringify({ status: 'error', message }), {
                     status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
                 });
             }
@@ -533,3 +673,8 @@ export default {
         return new Response('Not Found', { status: 404 });
     }
 }
+
+// --- Named exports for testing (non-behavioral) ---
+// Existing functions are exported as-is so tests can drive them directly with a
+// mocked fetch. The `export default` Worker handler above is unchanged.
+export { resolveVideo, getPlayUrlWithFallback, signWbi, getMixinKeyFromNav, getBuvid, getAntiCrawlCookie, AntiCrawlError, ANTI_CRAWL_MSG, fetchBiliJson };
