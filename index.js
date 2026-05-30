@@ -157,37 +157,103 @@ async function signWbi(params, cookie, mixinKey) {
     return query + `&w_rid=${await md5(query + mixin_key)}`;
 }
 
-// --- 视频解析 (原版) ---
-// 走 fetchBiliJson 取 playurl（注入 Cookie），并支持下传单次解析内缓存的 mixin_key。
-// - nav（mixin_key）在整个 fallback 循环中只取一次：若调用方未传入 mixinKey，则在进入循环
-//   前用 getMixinKeyFromNav(cookie) 计算一次；nav 若为反爬响应，AntiCrawlError 会直接抛出本函数
-//   （不吞掉），避免对每个清晰度重复请求 nav 放大风控。
-// - 关键：quality 循环的 catch 中若捕获到 AntiCrawlError，立即 throw 终止 fallback
-//   （重试只会放大风控）；非反爬的业务失败仍按原逻辑记录 lastError 并回退下一档。
-// - Preservation：成功返回 { url, quality } 的结构、普通业务失败（code!=0 / 缺 durl）逐档回退、
-//   qualities 列表计算与最终 throw new Error(lastError || ...) 均与改造前一致。
+// --- APP / TV 端取流签名 ---
+// 数据中心 IP 上 web 端 playurl 极易被风控（-352）。APP / TV 端使用 appkey + sign
+// 签名的接口走另一套风控策略，对未登录游客的容忍度通常更高，故作为 web 线路的备用。
+// appkey / appsec 来自公开的逆向资料（bilibili-API-collect: docs/misc/sign/APPKey.md）。
+const APP_KEYS = {
+    // iOS 视频取流专用
+    ios: { appkey: 'YvirImLGlLANCLvM', appsec: 'JNlZNgfNGKZEpaDTkCdPQVXntXhuiJEM', platform: 'ios', ua: 'Bilibili/8.0.0 (bbcallen@gmail.com)' },
+    // 云视听小电视 TV 版
+    tv: { appkey: '4409e2ce8ffd12b8', appsec: '59b43e04ad6965f34319062b478f83dd', platform: 'android', ua: 'Bilibili Freedoooooom/MOD' }
+};
+
+// APP API 签名：加 appkey → 按 key 排序 → urlencode 序列化 → 拼 appsec → md5(32 位小写) → sign。
+// 算法见 bilibili-API-collect: docs/misc/sign/APP.md。
+async function appSign(params, appkey, appsec) {
+    const all = { ...params, appkey };
+    const query = Object.keys(all).sort().map(k => `${k}=${encodeURIComponent(all[k])}`).join('&');
+    return query + `&sign=${await md5(query + appsec)}`;
+}
+
+// --- 视频解析 (多线路取流) ---
+// 数据中心 IP 上 web 端 playurl 极易被风控（-352 / HTML 风控页）。为在纯 serverless
+// 前提下尽量提高成功率，对每个清晰度依次尝试多条独立线路（APP iOS 取流 → TV → web），
+// 任一线路成功即返回；只有当所有线路在所有清晰度上都失败时才报错。
+//
+// - APP / TV 线路用 appkey+sign 签名，走另一套风控策略，对未登录游客容忍度通常更高；
+//   web 线路保留 wbi 签名并加 try_look=1 + platform=html5（未登录可拉 720P/1080P、无 referer 鉴权）。
+// - nav（mixin_key）仅 web 线路需要，且整个过程只取一次：调用方未传入则在进入循环前计算一次。
+//   若 nav 本身就是反爬响应，web 线路会被跳过，但 APP/TV 线路不依赖 nav，仍可继续尝试。
+// - 反爬识别（fetchBiliJson 抛 AntiCrawlError）被视为「该线路失败」记入 lastError 并尝试下一条，
+//   而非立即整体放弃——因为别的线路可能没被风控。全部线路皆失败时，若失败原因全是反爬则抛
+//   AntiCrawlError（前端显示中文风控提示），否则抛普通业务错误。
+// - Preservation：成功返回 { url, quality } 的结构不变；web 线路的业务失败回退语义保持。
 async function getPlayUrlWithFallback(bvid, cid, targetQn, cookie, mixinKey) {
     const qualities = [targetQn, 80, 64, 32].filter((v, i, a) => a.indexOf(v) === i && v <= targetQn);
-    // 单次解析内只取一次 nav：缺省则计算一次并在循环内复用（nav 反爬时直接抛出）。
-    const mixin_key = mixinKey !== undefined ? mixinKey : await getMixinKeyFromNav(cookie);
-    let lastError = null;
-    for (const qn of qualities) {
+
+    // 仅 web 线路需要 mixin_key；取 nav 失败（含反爬）不应阻断 APP/TV 线路。
+    let mixin_key = mixinKey;
+    let navAvailable = true;
+    if (mixin_key === undefined) {
         try {
-            const signedQuery = await signWbi({ bvid, cid, qn: qn, fnval: 1 }, cookie, mixin_key);
-            const pData = await fetchBiliJson(`https://api.bilibili.com/x/player/wbi/playurl?${signedQuery}`, {
-                headers: { 'User-Agent': UA, 'Referer': REFERER, 'Cookie': cookie }
-            });
-            if (pData.code === 0 && pData.data.durl?.[0]) {
-                return { url: pData.data.durl[0].url, quality: pData.data.quality };
-            } else { lastError = pData.message || ERROR_MAP[pData.code]; }
+            mixin_key = await getMixinKeyFromNav(cookie);
         } catch (e) {
-            // 反爬：立即中止 fallback 并向上抛出（重试只会放大风控）。
-            if (e instanceof AntiCrawlError || e.name === 'AntiCrawlError') throw e;
-            // 非反爬业务失败：记录并回退下一档（行为不变）。
-            lastError = e.message;
+            navAvailable = false; // nav 取不到（可能被风控），web 线路跳过，仍尝试 APP/TV
         }
     }
-    throw new Error(lastError || "视频解析失败");
+
+    let lastError = null;
+    let sawAntiCrawl = false;
+
+    // 单条线路：成功返回 { url, quality }；失败抛错（由调用处归类）。
+    const tryAppLine = async (qn, conf) => {
+        const params = { bvid, cid: String(cid), qn: String(qn), fnval: '1', fnver: '0', fourk: '1', platform: conf.platform, ts: String(Math.floor(Date.now() / 1000)) };
+        const signed = await appSign(params, conf.appkey, conf.appsec);
+        const pData = await fetchBiliJson(`https://api.bilibili.com/x/player/playurl?${signed}`, {
+            headers: { 'User-Agent': conf.ua }
+        });
+        if (pData.code === 0 && pData.data?.durl?.[0]?.url) {
+            return { url: pData.data.durl[0].url, quality: pData.data.quality };
+        }
+        throw new Error(pData.message || ERROR_MAP[pData.code] || '取流失败');
+    };
+
+    const tryWebLine = async (qn) => {
+        const signedQuery = await signWbi({ bvid, cid, qn, fnval: 1, try_look: 1, platform: 'html5', high_quality: 1 }, cookie, mixin_key);
+        const pData = await fetchBiliJson(`https://api.bilibili.com/x/player/wbi/playurl?${signedQuery}`, {
+            headers: { 'User-Agent': UA, 'Referer': REFERER, 'Cookie': cookie }
+        });
+        if (pData.code === 0 && pData.data?.durl?.[0]?.url) {
+            return { url: pData.data.durl[0].url, quality: pData.data.quality };
+        }
+        throw new Error(pData.message || ERROR_MAP[pData.code] || '取流失败');
+    };
+
+    for (const qn of qualities) {
+        const lines = [
+            () => tryAppLine(qn, APP_KEYS.ios),
+            () => tryAppLine(qn, APP_KEYS.tv),
+        ];
+        if (navAvailable) lines.push(() => tryWebLine(qn));
+
+        for (const line of lines) {
+            try {
+                return await line();
+            } catch (e) {
+                if (e instanceof AntiCrawlError || e.name === 'AntiCrawlError') {
+                    sawAntiCrawl = true;
+                } else {
+                    lastError = e.message;
+                }
+                // 该线路失败，尝试下一条线路 / 下一档清晰度。
+            }
+        }
+    }
+
+    // 全部线路皆失败：若出现过反爬且无其它业务错误，报中文风控；否则报业务错误。
+    if (sawAntiCrawl && !lastError) throw new AntiCrawlError();
+    throw new Error(lastError || (sawAntiCrawl ? ANTI_CRAWL_MSG : "视频解析失败"));
 }
 
 // 单次解析内只采集一次反爬 Cookie（finger/spi 仅请求一次），并将 Cookie 注入
@@ -204,8 +270,9 @@ async function resolveVideo(bvid, qn, host) {
     if (vData.code !== 0) throw new Error(ERROR_MAP[vData.code] || vData.message);
 
     const { cid, title, pic, owner } = vData.data;
-    const mixinKey = await getMixinKeyFromNav(cookie);
-    const videoStream = await getPlayUrlWithFallback(bvid, cid, qn || 116, cookie, mixinKey);
+    // 不在此预取 nav：nav 在数据中心 IP 上可能被风控，预取失败会阻断 APP/TV 取流线路。
+    // 将 nav（mixin_key）的获取交给 getPlayUrlWithFallback 内部按需、容错地处理。
+    const videoStream = await getPlayUrlWithFallback(bvid, cid, qn || 116, cookie);
 
     const playableUrl = `${host}/proxy?url=${encodeURIComponent(videoStream.url)}&name=${encodeURIComponent(title)}`;
     const downloadUrl = `${playableUrl}&dl=1`;
@@ -677,4 +744,4 @@ export default {
 // --- Named exports for testing (non-behavioral) ---
 // Existing functions are exported as-is so tests can drive them directly with a
 // mocked fetch. The `export default` Worker handler above is unchanged.
-export { resolveVideo, getPlayUrlWithFallback, signWbi, getMixinKeyFromNav, getBuvid, getAntiCrawlCookie, AntiCrawlError, ANTI_CRAWL_MSG, fetchBiliJson };
+export { resolveVideo, getPlayUrlWithFallback, signWbi, getMixinKeyFromNav, appSign, getBuvid, getAntiCrawlCookie, AntiCrawlError, ANTI_CRAWL_MSG, fetchBiliJson };
