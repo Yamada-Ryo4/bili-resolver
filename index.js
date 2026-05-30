@@ -687,45 +687,6 @@ export default {
         if (path === '/proxy') return handleProxy(request, url, host);
         if (path === '/' || path === '') return new Response(UI(host), { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
 
-        // [临时调试] 探测各上游接口在当前出口 IP 上的真实响应，用完即移除。
-        if (path === '/api/debug') {
-            const bvid = (url.searchParams.get('text') || 'BV1GJ411x7h7').match(/(BV[a-zA-Z0-9]{10})/)?.[1] || 'BV1GJ411x7h7';
-            const out = {};
-            const probe = async (name, u, opts) => {
-                try {
-                    const r = await fetch(u, opts);
-                    const t = await r.text();
-                    let code = null;
-                    try { code = JSON.parse(t).code; } catch {}
-                    out[name] = { http: r.status, ct: (r.headers.get('content-type') || '').split(';')[0], code, head: t.slice(0, 80) };
-                } catch (e) { out[name] = { err: e.message }; }
-            };
-            const cookie = await getAntiCrawlCookie().catch(e => 'ERR:' + e.message);
-            out._cookie = typeof cookie === 'string' ? cookie.slice(0, 40) : cookie;
-            // view
-            await probe('view', `https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { headers: { 'User-Agent': UA, 'Referer': REFERER, 'Cookie': cookie } });
-            let cid = 137649199;
-            try { cid = JSON.parse(out.view.head ? '{}' : '{}').data?.cid || cid; } catch {}
-            // 重新取 cid（完整）
-            try { const vr = await fetch(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, { headers: { 'User-Agent': UA, 'Referer': REFERER, 'Cookie': cookie } }); const vj = await vr.json(); cid = vj.data?.cid || cid; } catch {}
-            // APP ios
-            {
-                const c = APP_KEYS.ios;
-                const p = { bvid, cid: String(cid), qn: '80', fnval: '1', fnver: '0', fourk: '1', platform: c.platform, ts: String(Math.floor(Date.now() / 1000)) };
-                const signed = await appSign(p, c.appkey, c.appsec);
-                await probe('app_ios', `https://api.bilibili.com/x/player/playurl?${signed}`, { headers: { 'User-Agent': c.ua } });
-            }
-            // TV
-            {
-                const c = APP_KEYS.tv;
-                const p = { bvid, cid: String(cid), qn: '80', fnval: '1', fnver: '0', fourk: '1', platform: c.platform, ts: String(Math.floor(Date.now() / 1000)) };
-                const signed = await appSign(p, c.appkey, c.appsec);
-                await probe('tv', `https://api.bilibili.com/x/player/playurl?${signed}`, { headers: { 'User-Agent': c.ua } });
-            }
-            return new Response(JSON.stringify(out, null, 2), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
-        }
-
-
         // 视频 API
         if (path === '/api/video') {
             const text = url.searchParams.get('text');
