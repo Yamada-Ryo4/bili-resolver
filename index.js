@@ -645,7 +645,12 @@ async function handleProxy(request, url, host) {
         'User-Agent': isLive ? UA_MOBILE : UA,
         'Origin': isLive ? 'https://live.bilibili.com' : 'https://www.bilibili.com'
     });
-    if (request.headers.has("Range")) newHeaders.set("Range", request.headers.get("Range"));
+    
+    // 转发所有与断点续传/缓存相关的请求头
+    const forwardHeaders = ['Range', 'If-Range', 'If-Match', 'If-None-Match', 'If-Modified-Since', 'If-Unmodified-Since'];
+    for (const h of forwardHeaders) {
+        if (request.headers.has(h)) newHeaders.set(h, request.headers.get(h));
+    }
 
     try {
         const response = await fetch(target, { headers: newHeaders });
@@ -675,6 +680,9 @@ async function handleProxy(request, url, host) {
         for (const h of headersToCopy) {
             if (response.headers.has(h)) responseHeaders.set(h, response.headers.get(h));
         }
+        // 必须 Expose 这些 Headers，否则前端浏览器或 VRChat 的播放器拿不到断点续传信息
+        responseHeaders.set('Access-Control-Expose-Headers', headersToCopy.join(', '));
+        
         if (name && isDownload) {
             responseHeaders.set("Content-Disposition", `attachment; filename="${encodeURIComponent(name)}.mp4"`);
         }
