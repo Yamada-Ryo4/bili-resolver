@@ -671,8 +671,10 @@ async function handleProxy(request, url, host) {
             return new Response(m3u8Content, { status: 200, headers: responseHeaders });
         }
 
-        if (response.headers.has('Content-Type')) responseHeaders.set('Content-Type', response.headers.get('Content-Type'));
-        if (response.headers.has('Content-Length')) responseHeaders.set('Content-Length', response.headers.get('Content-Length'));
+        const headersToCopy = ['Content-Type', 'Content-Length', 'Accept-Ranges', 'Content-Range', 'ETag', 'Last-Modified', 'Cache-Control'];
+        for (const h of headersToCopy) {
+            if (response.headers.has(h)) responseHeaders.set(h, response.headers.get(h));
+        }
         if (name && isDownload) {
             responseHeaders.set("Content-Disposition", `attachment; filename="${encodeURIComponent(name)}.mp4"`);
         }
