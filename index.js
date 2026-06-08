@@ -11,6 +11,26 @@ const LIVE_REFERER = 'https://live.bilibili.com/';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
 
+let WORKER_ENV = {};
+
+// 代理 Fetch 封装，统一附加 VERCEL_PROXY 和 PROXY_TOKEN
+function proxiedFetch(originalUrl, options = {}) {
+    let finalUrl = originalUrl;
+    const isBiliApi = typeof originalUrl === 'string' && (originalUrl.includes('api.bilibili.com') || originalUrl.includes('api.live.bilibili.com'));
+    
+    if (WORKER_ENV.VERCEL_PROXY && isBiliApi) {
+        finalUrl = WORKER_ENV.VERCEL_PROXY + encodeURIComponent(originalUrl);
+    }
+    
+    const finalOptions = { ...options };
+    if (WORKER_ENV.PROXY_TOKEN && isBiliApi) {
+        finalOptions.headers = new Headers(options.headers || {});
+        finalOptions.headers.set('x-proxy-token', WORKER_ENV.PROXY_TOKEN);
+    }
+    
+    return fetch(finalUrl, finalOptions);
+}
+
 const ERROR_MAP = {
     '-400': '请求错误', '-403': '访问权限不足', '-404': '视频不存在',
     '-10403': '仅限港澳台地区', '62002': '视频不可见', '62004': '审核中'
@@ -35,7 +55,7 @@ class AntiCrawlError extends Error {
 // `Unexpected token` / `is not valid JSON` 解析错误泄漏到上层。
 // 注意：非 -352 的业务码（如 -404）不在此处理，原样返回交由调用点既有 ERROR_MAP 逻辑（保证 Preservation）。
 async function fetchBiliJson(url, options) {
-    const res = await fetch(url, options);
+    const res = await proxiedFetch(url, options);
 
     // 1) 非 2xx 视为反爬 / 异常。
     if (!res.ok) throw new AntiCrawlError();
@@ -67,7 +87,7 @@ async function fetchBiliJson(url, options) {
 // --- Buvid ---
 async function getBuvid() {
     try {
-        const res = await fetch("https://api.bilibili.com/x/frontend/finger/spi", { headers: { "User-Agent": UA } });
+        const res = await proxiedFetch("https://api.bilibili.com/x/frontend/finger/spi", { headers: { "User-Agent": UA } });
         const json = await res.json();
         return json.data?.b_3 || "FE6D3664-927F-F75B-B7D4-733E5D4B263F69428infoc";
     } catch (e) { return "FE6D3664-927F-F75B-B7D4-733E5D4B263F69428infoc"; }
@@ -100,7 +120,7 @@ async function getAntiCrawlCookie() {
 
     // 1) finger/spi -> b_3 / b_4
     try {
-        const res = await fetch("https://api.bilibili.com/x/frontend/finger/spi", { headers: { "User-Agent": UA } });
+        const res = await proxiedFetch("https://api.bilibili.com/x/frontend/finger/spi", { headers: { "User-Agent": UA } });
         const json = await res.json();
         if (json.data?.b_3) buvid3 = json.data.b_3;
         if (json.data?.b_4) buvid4 = json.data.b_4;
@@ -112,7 +132,7 @@ async function getAntiCrawlCookie() {
         const ts = Math.floor(Date.now() / 1000);
         const hexsign = await hmacSha256Hex('XgwSnGZ1p', 'ts' + ts);
         const ticketUrl = `https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket?key_id=ec02&hexsign=${hexsign}&context[ts]=${ts}&csrf=`;
-        const res = await fetch(ticketUrl, { method: 'POST', headers: { "User-Agent": UA } });
+        const res = await proxiedFetch(ticketUrl, { method: 'POST', headers: { "User-Agent": UA } });
         const json = await res.json();
         if (json.data?.ticket) ticket = json.data.ticket;
     } catch (e) { /* 降级为仅 buvid3 / buvid4 */ }
@@ -282,7 +302,7 @@ async function resolveVideo(bvid, qn, host) {
 
 // --- 直播解析 (v4.1) ---
 async function resolveLive(roomId, host) {
-    const infoRes = await fetch(`https://api.live.bilibili.com/room/v1/Room/get_info?room_id=${roomId}`, {
+    const infoRes = await proxiedFetch(`https://api.live.bilibili.com/room/v1/Room/get_info?room_id=${roomId}`, {
         headers: { 'User-Agent': UA, 'Referer': LIVE_REFERER }
     });
     const infoData = await infoRes.json();
@@ -303,7 +323,7 @@ async function resolveLive(roomId, host) {
     const fetchStreamLegacy = async () => {
         const api = `https://api.live.bilibili.com/room/v1/Room/playUrl?cid=${realRoomId}&platform=h5&quality=3`;
         try {
-            const res = await fetch(api, { headers: getHeaders() });
+            const res = await proxiedFetch(api, { headers: getHeaders() });
             const data = await res.json();
             if (data.data?.durl?.[0]?.url) {
                 const url = data.data.durl[0].url;
@@ -318,7 +338,7 @@ async function resolveLive(roomId, host) {
     const fetchStreamV2 = async () => {
         const api = `https://api.live.bilibili.com/xlive/web-room/v2/index/getRoomPlayInfo?room_id=${realRoomId}&protocol=0,1&format=0,1,2&codec=0,1&platform=h5&qn=150`;
         try {
-            const res = await fetch(api, { headers: getHeaders() });
+            const res = await proxiedFetch(api, { headers: getHeaders() });
             const data = await res.json();
             const streams = data.data?.playurl_info?.playurl?.stream;
             if (!streams) return null;
@@ -665,6 +685,7 @@ async function handleProxy(request, url, host) {
 
 export default {
     async fetch(request, env, ctx) {
+        WORKER_ENV = env || {};
         const url = new URL(request.url);
         const host = url.origin;
         const path = url.pathname;

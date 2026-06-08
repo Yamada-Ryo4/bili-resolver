@@ -1,0 +1,15 @@
+{
+  "name": "bili-resolver",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bilibili Resolver & Proxy Cloudflare Worker",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "fast-check": "^3.23.2",
+    "vitest": "^2.1.8"
+  }
+}
