@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Wrangler / Cloudflare
+.wrangler/
+.dev.vars
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Unrelated reference subproject (not part of this Worker)
+bilibili-api-collect-master/
+
+# Development memory
+memory.md

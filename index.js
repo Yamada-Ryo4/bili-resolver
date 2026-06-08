@@ -689,9 +689,22 @@ export default {
 
         // 视频 API
         if (path === '/api/video') {
-            const text = url.searchParams.get('text');
+            let text = url.searchParams.get('text');
             const qn = parseInt(url.searchParams.get('qn')) || 80;
             if (!text) return new Response(JSON.stringify({ status: 'error', message: 'Missing text' }), { status: 400 });
+
+            // 尝试解析 b23.tv 短链
+            const b23Match = text.match(/b23\.tv\/([a-zA-Z0-9]+)/);
+            if (b23Match) {
+                try {
+                    const res = await fetch(`https://b23.tv/${b23Match[1]}`, { method: 'GET', redirect: 'manual' });
+                    if (res.status >= 300 && res.status < 400) {
+                        text = res.headers.get('location') || text;
+                    }
+                } catch (e) {
+                    // 忽略短链解析失败，交由后续的 BV 号匹配来判断
+                }
+            }
 
             const bvMatch = text.match(/(BV[a-zA-Z0-9]{10})/);
             if (!bvMatch) return new Response(JSON.stringify({ status: 'error', message: '无效的 BV 号' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
