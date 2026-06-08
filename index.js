@@ -57,11 +57,15 @@ class AntiCrawlError extends Error {
 async function fetchBiliJson(url, options) {
     const res = await proxiedFetch(url, options);
 
-    // 1) 非 2xx 视为反爬 / 异常。
-    if (!res.ok) throw new AntiCrawlError();
-
     // 2) body 只消费一次，统一按文本读取后再解析。
     const text = await res.text();
+
+    // 1) 非 2xx 视为反爬 / 异常。优先检查是否是 Vercel 代理本身的报错
+    if (!res.ok) {
+        if (res.status === 401 || text.includes('Unauthorized')) throw new Error('Vercel 代理鉴权失败：请检查 Cloudflare 上的 PROXY_TOKEN 是否与 Vercel 中的代码一致');
+        if (res.status === 404 || text.includes('NOT_FOUND')) throw new Error('Vercel 代理地址失效：请检查 VERCEL_PROXY 变量结尾是否带了 /api/proxy?url=');
+        throw new AntiCrawlError();
+    }
 
     // 3) Content-Type 非 JSON，或 body 以 '<' 开头（HTML / DOCTYPE 风控页）→ 反爬。
     const contentType = res.headers.get('content-type') || '';
