@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-012'; // 每次 push 时更新此版本号
+const VERSION = '20260609-013'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -321,7 +321,7 @@ async function resolveLive(roomId, host) {
     if (infoData.code !== 0) throw new Error("直播间不存在");
 
     const { title, user_cover, keyframe, live_status, room_id: realRoomId, uid } = infoData.data;
-    if (live_status !== 1) throw new Error("主播未开播");
+    if (live_status !== 1 && live_status !== 2) throw new Error("主播未开播");
 
     const buvid = await getBuvid();
     const getHeaders = () => ({
