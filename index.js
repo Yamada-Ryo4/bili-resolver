@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-008'; // 每次 push 时更新此版本号
+const VERSION = '20260609-009'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -782,17 +782,10 @@ export default {
             if (!bvMatch) return new Response(JSON.stringify({ status: 'error', message: '无效的 BV 号' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
             try {
-                const cache = caches.default;
-                const cacheKey = new Request(url.toString(), request);
-                let response = await cache.match(cacheKey);
-                if (!response) {
-                    const res = await resolveVideo(bvMatch[1], qn, host);
-                    response = new Response(JSON.stringify({ status: 'success', ...res }), {
-                        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=1200' }
-                    });
-                    ctx.waitUntil(cache.put(cacheKey, response.clone()));
-                }
-                return response;
+                const res = await resolveVideo(bvMatch[1], qn, host);
+                return new Response(JSON.stringify({ status: 'success', ...res }), {
+                    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }
+                });
             } catch (e) {
                 // 反爬异常统一映射为中文提示；其它异常保留原 message（如 ERROR_MAP 业务码错误）。
                 const message = (e instanceof AntiCrawlError || e.name === 'AntiCrawlError') ? ANTI_CRAWL_MSG : e.message;
