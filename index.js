@@ -18,14 +18,17 @@ function proxiedFetch(originalUrl, options = {}) {
     let finalUrl = originalUrl;
     const isBiliApi = typeof originalUrl === 'string' && (originalUrl.includes('api.bilibili.com') || originalUrl.includes('api.live.bilibili.com'));
     
-    if (WORKER_ENV.VERCEL_PROXY && isBiliApi) {
-        finalUrl = WORKER_ENV.VERCEL_PROXY + encodeURIComponent(originalUrl);
+    // Vercel 代理地址，优先使用环境变量，如果没有则使用兜底默认值
+    const proxyBase = WORKER_ENV.VERCEL_PROXY || 'https://bili-proxy-blue.vercel.app/api/proxy?url=';
+    if (proxyBase && isBiliApi) {
+        finalUrl = proxyBase + encodeURIComponent(originalUrl);
     }
     
     const finalOptions = { ...options };
-    if (WORKER_ENV.PROXY_TOKEN && isBiliApi) {
+    // 给 Vercel 代理的请求统一带上 Token
+    if (isBiliApi) {
         finalOptions.headers = new Headers(options.headers || {});
-        finalOptions.headers.set('x-proxy-token', WORKER_ENV.PROXY_TOKEN);
+        finalOptions.headers.set('x-proxy-token', WORKER_ENV.PROXY_TOKEN || 'bili_token_vercel');
     }
     
     return fetch(finalUrl, finalOptions);
