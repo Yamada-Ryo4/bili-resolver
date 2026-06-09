@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-005'; // 每次 push 时更新此版本号
+const VERSION = '20260609-007'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -304,11 +304,9 @@ async function resolveVideo(bvid, qn, host) {
     // 将 nav（mixin_key）的获取交给 getPlayUrlWithFallback 内部按需、容错地处理。
     const videoStream = await getPlayUrlWithFallback(bvid, cid, qn || 116, cookie);
 
-    // 放弃使用 /proxy 中转视频流。因为：
-    // 1. CF/Vercel 等机房 IP 会被 B 站 CDN 严格限速（仅 100~300KB/s），导致长视频加载极慢。
-    // 2. 浏览器拖动进度条（Range）会频繁取消请求，CF Worker 无法及时断开上游连接，导致连接池耗尽（抓包可见大量 pending/cancelled）。
-    // 必须使用直连。要在网页端直接预览，必须借助 Header Editor 等浏览器插件修改 Referer。
-    const playableUrl = videoStream.url;
+    // playableUrl 走 /proxy 中转：代理会附加正确的 Referer，使浏览器 Range 请求（进度条拖动）正常工作
+    // 已修复：代理底层通过抛弃僵尸连接（传递 AbortSignal），彻底解决拖动卡死问题
+    const playableUrl = `${host}/proxy?url=${encodeURIComponent(videoStream.url)}&name=${encodeURIComponent(title)}`;
     const downloadUrl = `${host}/proxy?url=${encodeURIComponent(videoStream.url)}&name=${encodeURIComponent(title)}&dl=1`;
 
     return { title, pic, bvid, author: owner.name, playableUrl, downloadUrl, quality: videoStream.quality, isLive: false };
@@ -667,7 +665,11 @@ async function handleProxy(request, url, host) {
     }
 
     try {
-        const response = await fetch(target, { headers: newHeaders });
+        // 关键修复：必须传递 signal: request.signal
+        // 当用户拖动进度条导致浏览器取消旧请求时，CF Worker 会立即切断与 B 站 CDN 的上游连接，彻底消灭僵尸连接！
+        // 同时强制 Accept-Encoding: identity 避免 CF 尝试压缩导致卡顿
+        newHeaders.set('Accept-Encoding', 'identity');
+        const response = await fetch(target, { headers: newHeaders, signal: request.signal });
         if (!response.ok) {
             return new Response(`CDN Error: ${response.status}`, { status: response.status });
         }
