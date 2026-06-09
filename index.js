@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-013'; // 每次 push 时更新此版本号
+const VERSION = '20260609-014'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -833,10 +833,22 @@ export default {
 
         // 直播 API
         if (path === '/api/live') {
-            const room = url.searchParams.get('room');
+            let room = url.searchParams.get('room');
             if (!room) return new Response(JSON.stringify({ status: 'error', message: 'Missing room' }), { status: 400 });
 
-            const roomId = room.match(/(\d+)/)?.[1];
+            // 尝试解析 b23.tv 短链
+            const b23Match = room.match(/b23\.tv\/([a-zA-Z0-9]+)/);
+            if (b23Match) {
+                try {
+                    const res = await fetch(`https://b23.tv/${b23Match[1]}`, { method: 'GET', redirect: 'manual' });
+                    if (res.status >= 300 && res.status < 400) {
+                        room = res.headers.get('location') || room;
+                    }
+                } catch (e) {}
+            }
+
+            // 提取房间号：优先匹配 live.bilibili.com/数字，否则直接匹配纯数字
+            const roomId = room.match(/live\.bilibili\.com\/(\d+)/)?.[1] || room.match(/(?<![a-zA-Z])(\d+)(?![a-zA-Z])/)?.[1] || room.match(/(\d+)/)?.[1];
             if (!roomId) return new Response(JSON.stringify({ status: 'error', message: '无效的房间号' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
             try {
