@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-016'; // 每次 push 时更新此版本号
+const VERSION = '20260609-017'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -373,10 +373,9 @@ async function resolveLive(roomId, host) {
     if (!result) result = await fetchStreamV2();
     if (!result) throw new Error("获取直播流失败");
 
-    // 直播流使用混合代理模式：
-    // m3u8 播放列表文件由 CF Worker 代理请求（解决无插件时跨域/Referer 拦截问题）
-    // m3u8 内的 ts 视频切片被替换为直连 CDN 地址（绕过 CF IP 被 B 站 ov 等节点拦截限速的问题）
-    const playableUrl = `${host}/proxy?url=${encodeURIComponent(result.url)}&live=1&m3u8_direct=1`;
+    // 直播流直接使用 CDN 原始直连地址
+    // 配合全站 <meta name="referrer" content="no-referrer">，测试 B 站 CDN 是否允许空 Referer 播放
+    const playableUrl = result.url;
     const isHLS = result.url.includes('.m3u8');
     const formatStr = `${isHLS ? 'HLS' : 'FLV'} (${result.nodeType})`;
 
@@ -399,6 +398,7 @@ const UI = (host) => `
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
     <title>Bilibili 解析</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
@@ -607,7 +607,7 @@ const UI = (host) => `
             document.getElementById('bg-cover').style.opacity = '0';
 
             try {
-                const res = await fetch(\`/api/video?text=\${encodeURIComponent(input)}&qn=\${qn}\`);
+                const res = await fetch(`/api/video?text=${encodeURIComponent(input)}&qn=${qn}`);
                 const data = await res.json();
                 if (data.status === 'success') {
                     showResult(data, isQuest);
@@ -626,7 +626,7 @@ const UI = (host) => `
             document.getElementById('bg-cover').style.opacity = '0';
 
             try {
-                const res = await fetch(\`/api/live?room=\${encodeURIComponent(input)}\`);
+                const res = await fetch(`/api/live?room=${encodeURIComponent(input)}`);
                 const data = await res.json();
                 if (data.status === 'success') {
                     showResult(data, false);
@@ -640,7 +640,7 @@ const UI = (host) => `
             currentPlayableUrl = data.playableUrl;
             isCurrentLive = data.isLive;
             document.getElementById('resPic').src = pic;
-            document.getElementById('bg-cover').style.backgroundImage = \`url('\${pic}')\`;
+            document.getElementById('bg-cover').style.backgroundImage = `url('${pic}')`;
             document.getElementById('bg-cover').style.opacity = '0.4';
             document.getElementById('resTitle').innerText = data.title;
             document.getElementById('resAuthor').innerText = data.author;
