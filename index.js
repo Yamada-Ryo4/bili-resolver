@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-007'; // 每次 push 时更新此版本号
+const VERSION = '20260609-008'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -703,7 +703,10 @@ async function handleProxy(request, url, host) {
             responseHeaders.set("Content-Disposition", `attachment; filename="${encodeURIComponent(name)}.mp4"`);
         }
 
-        return new Response(response.body, { status: response.status, headers: responseHeaders });
+        // 关键修复：HTTP 304 Not Modified 和 204 No Content 不能携带 body，否则 CF Worker 会抛出内部异常 502
+        const body = (response.status === 204 || response.status === 304) ? null : response.body;
+
+        return new Response(body, { status: response.status, headers: responseHeaders });
     } catch (e) {
         return new Response(`Proxy Error: ${e.message}`, { status: 502 });
     }
