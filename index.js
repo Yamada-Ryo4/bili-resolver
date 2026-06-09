@@ -304,9 +304,11 @@ async function resolveVideo(bvid, qn, host) {
     // 将 nav（mixin_key）的获取交给 getPlayUrlWithFallback 内部按需、容错地处理。
     const videoStream = await getPlayUrlWithFallback(bvid, cid, qn || 116, cookie);
 
-    // playableUrl 走 /proxy 中转：代理会附加正确的 Referer，使浏览器 Range 请求（进度条拖动）正常工作
-    // 代理是流式的（response.body pipe），不会缓冲整个文件，不影响加载速度
-    const playableUrl = `${host}/proxy?url=${encodeURIComponent(videoStream.url)}&name=${encodeURIComponent(title)}`;
+    // 放弃使用 /proxy 中转视频流。因为：
+    // 1. CF/Vercel 等机房 IP 会被 B 站 CDN 严格限速（仅 100~300KB/s），导致长视频加载极慢。
+    // 2. 浏览器拖动进度条（Range）会频繁取消请求，CF Worker 无法及时断开上游连接，导致连接池耗尽（抓包可见大量 pending/cancelled）。
+    // 必须使用直连。要在网页端直接预览，必须借助 Header Editor 等浏览器插件修改 Referer。
+    const playableUrl = videoStream.url;
     const downloadUrl = `${host}/proxy?url=${encodeURIComponent(videoStream.url)}&name=${encodeURIComponent(title)}&dl=1`;
 
     return { title, pic, bvid, author: owner.name, playableUrl, downloadUrl, quality: videoStream.quality, isLive: false };
