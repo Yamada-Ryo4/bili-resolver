@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-014'; // 每次 push 时更新此版本号
+const VERSION = '20260609-015'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -398,6 +398,7 @@ const UI = (host) => `
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bilibili 解析</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;700;900&display=swap" rel="stylesheet">
     <style>
         body { background: #0f172a; font-family: 'Noto Sans SC', sans-serif; }
@@ -471,24 +472,24 @@ const UI = (host) => `
             <div id="loader" class="hidden py-8 text-center"><div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div></div>
 
             <!-- 结果 -->
-            <div id="result" class="hidden space-y-4 pt-4 border-t border-white/5">
-                <div class="flex gap-4 items-start">
-                    <img id="resPic" referrerpolicy="no-referrer" class="w-28 h-16 object-cover rounded-lg shadow-md bg-slate-800 shrink-0">
-                    <div class="min-w-0 flex-1 space-y-1">
-                        <h3 id="resTitle" class="text-sm font-bold leading-tight line-clamp-2"></h3>
-                        <div class="flex items-center gap-2">
-                            <span id="resTag" class="text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded font-bold uppercase">VIDEO</span>
-                            <span id="resQuality" class="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded">1080P</span>
+            <div id="result" class="hidden mt-6 bg-slate-900/80 rounded-2xl p-4 border border-slate-700/50">
+                <div class="flex gap-4">
+                    <img id="resPic" class="w-28 h-28 object-cover rounded-xl shadow-lg" src="">
+                    <div class="flex-1 min-w-0 flex flex-col justify-center space-y-1">
+                        <h3 id="resTitle" class="font-bold text-sm truncate text-white"></h3>
+                        <p id="resAuthor" class="text-xs text-slate-400"></p>
+                        <div class="flex gap-2 mt-2">
+                            <span id="resFormat" class="text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-300 font-mono"></span>
+                            <span id="resQuality" class="text-[10px] bg-blue-900/50 text-blue-300 px-2 py-1 rounded font-mono"></span>
                         </div>
                     </div>
                 </div>
-                <div class="relative">
-                    <input id="link" readonly class="w-full bg-slate-900/40 border border-slate-700/50 rounded-xl px-4 py-3 text-xs text-slate-300 outline-none font-mono tracking-tight">
-                    <button onclick="copyLink()" class="absolute right-2 top-2 bg-slate-700/50 hover:bg-slate-600 text-xs px-3 py-1 rounded-lg">复制</button>
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                    <a id="btnPreview" target="_blank" class="flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold">预览</a>
-                    <a id="btnDownload" href="#" class="flex items-center justify-center bg-gradient-to-r from-pink-600 to-rose-600 py-3 rounded-xl text-sm font-bold shadow-lg active:scale-95">下载</a>
+
+                <video id="player" controls class="w-full mt-4 rounded-xl hidden bg-black"></video>
+
+                <div class="flex gap-2 mt-4">
+                    <button id="btnPreview" onclick="playPreview()" class="flex-1 flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">👀 网页内播放</button>
+                    <button onclick="copyUrl()" class="flex-1 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 py-3 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 transition transform hover:-translate-y-0.5">📋 复制直链</button>
                 </div>
             </div>
         </div>
@@ -506,28 +507,68 @@ const UI = (host) => `
 
     <script>
         let currentMode = 'video';
+        let currentPlayableUrl = '';
+        let isCurrentLive = false;
+        let hlsPlayer = null;
 
         function setMode(mode) {
             currentMode = mode;
-            document.getElementById('videoPanel').classList.toggle('hidden', mode !== 'video');
-            document.getElementById('livePanel').classList.toggle('hidden', mode !== 'live');
-            document.getElementById('modeVideo').classList.toggle('active', mode === 'video');
-            document.getElementById('modeLive').classList.toggle('active', mode === 'live');
-            document.getElementById('modeVideo').classList.toggle('text-slate-400', mode !== 'video');
-            document.getElementById('modeLive').classList.toggle('text-slate-400', mode !== 'live');
+            document.querySelectorAll('.mode-btn').forEach(b => {
+                b.classList.remove('active', 'text-white');
+                b.classList.add('text-slate-400');
+            });
+            document.getElementById(mode === 'video' ? 'modeVideo' : 'modeLive').classList.add('active', 'text-white');
+            document.getElementById(mode === 'video' ? 'modeVideo' : 'modeLive').classList.remove('text-slate-400');
+            
+            document.getElementById('videoPanel').style.display = mode === 'video' ? 'block' : 'none';
+            document.getElementById('livePanel').style.display = mode === 'live' ? 'block' : 'none';
             document.getElementById('result').classList.add('hidden');
+            
+            if (hlsPlayer) {
+                hlsPlayer.destroy();
+                hlsPlayer = null;
+            }
+            document.getElementById('player').classList.add('hidden');
+            document.getElementById('player').src = '';
             document.getElementById('historyArea').classList.toggle('hidden', mode !== 'video' || !hasHistory());
         }
 
         function hasHistory() { return JSON.parse(localStorage.getItem('bili_history') || '[]').length > 0; }
 
-        function showToast(msg, warn = false) { 
-            const t = document.getElementById('toast'); 
-            t.innerText = msg; 
-            t.className = 'toast show' + (warn ? ' warn' : '');
-            setTimeout(() => t.className = 'toast', 4000); 
+        function showToast(msg, type='success') {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.className = 'toast show ' + (type === 'warn' ? 'warn' : '');
+            setTimeout(() => t.classList.remove('show'), 2500);
         }
-        function copyLink() { document.getElementById('link').select(); document.execCommand('copy'); showToast('已复制'); }
+
+        function playPreview() {
+            if (!currentPlayableUrl) return;
+            const video = document.getElementById('player');
+            video.classList.remove('hidden');
+            
+            if (isCurrentLive || currentPlayableUrl.includes('.m3u8')) {
+                if (Hls.isSupported()) {
+                    if (hlsPlayer) hlsPlayer.destroy();
+                    hlsPlayer = new Hls();
+                    hlsPlayer.loadSource(currentPlayableUrl);
+                    hlsPlayer.attachMedia(video);
+                    hlsPlayer.on(Hls.Events.MANIFEST_PARSED, function() {
+                        video.play();
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = currentPlayableUrl;
+                    video.play();
+                } else {
+                    showToast('您的浏览器不支持 HLS 播放', 'warn');
+                }
+            } else {
+                video.src = currentPlayableUrl;
+                video.play();
+            }
+        }
+
+        function copyUrl() { navigator.clipboard.writeText(currentPlayableUrl); showToast('直链已复制'); }
 
         function loadHistory() {
             const h = JSON.parse(localStorage.getItem('bili_history') || '[]');
