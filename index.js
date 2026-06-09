@@ -726,6 +726,21 @@ export default {
         if (path === '/proxy') return handleProxy(request, url, host);
         if (path === '/' || path === '') return new Response(UI(host), { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
 
+        // /BVxxxxxx 直链入口 → 302 跳转到视频下载直链
+        const bvDirectMatch = path.match(/^\/(BV[a-zA-Z0-9]{10})$/i);
+        if (bvDirectMatch) {
+            const qn = parseInt(url.searchParams.get('qn')) || 80;
+            try {
+                const res = await resolveVideo(bvDirectMatch[1], qn, host);
+                return Response.redirect(res.downloadUrl, 302);
+            } catch (e) {
+                const message = (e instanceof AntiCrawlError || e.name === 'AntiCrawlError') ? ANTI_CRAWL_MSG : e.message;
+                return new Response(JSON.stringify({ status: 'error', message }), {
+                    status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+                });
+            }
+        }
+
         // 视频 API
         if (path === '/api/video') {
             let text = url.searchParams.get('text');
