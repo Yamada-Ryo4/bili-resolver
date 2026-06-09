@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-025'; // 每次 push 时更新此版本号
+const VERSION = '20260609-026'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -490,7 +490,7 @@ const UI = (host) => `
                 </div>
 
                 <div class="flex gap-2 mt-4">
-                    <a id="btnPreview" href="#" target="_blank" class="flex-1 flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">👀 预览</a>
+                    <a id="btnPreview" href="#" target="_blank" class="flex-1 flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">预览</a>
                     <a id="btnDownload" href="#" class="flex-1 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 py-3 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 transition transform hover:-translate-y-0.5 text-center">⬇️ 下载</a>
                 </div>
             </div>
