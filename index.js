@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-022'; // 每次 push 时更新此版本号
+const VERSION = '20260609-023'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -658,10 +658,11 @@ async function handleProxy(request, url, host) {
 
     const isM3u8 = target.includes('.m3u8');
 
-    const newHeaders = new Headers(request.headers);
-    newHeaders.set('Referer', isLive ? LIVE_REFERER : REFERER);
-    newHeaders.set('User-Agent', isLive ? UA_MOBILE : UA);
-    newHeaders.set('Origin', isLive ? 'https://live.bilibili.com' : 'https://www.bilibili.com');
+    const newHeaders = new Headers({
+        'Referer': isLive ? LIVE_REFERER : REFERER,
+        'User-Agent': isLive ? UA_MOBILE : UA,
+        'Origin': isLive ? 'https://live.bilibili.com' : 'https://www.bilibili.com'
+    });
     
     // 转发部分请求头，但不转发 If-Modified-Since 等缓存校验头，强制 B 站返回 206 或 200，从根本上避开 304 报错问题
     const forwardHeaders = ['Range', 'If-Range', 'If-Match'];
