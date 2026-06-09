@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-003'; // 每次 push 时更新此版本号
+const VERSION = '20260609-004'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -304,8 +304,10 @@ async function resolveVideo(bvid, qn, host) {
     // 将 nav（mixin_key）的获取交给 getPlayUrlWithFallback 内部按需、容错地处理。
     const videoStream = await getPlayUrlWithFallback(bvid, cid, qn || 116, cookie);
 
-    const playableUrl = `${host}/proxy?url=${encodeURIComponent(videoStream.url)}&name=${encodeURIComponent(title)}`;
-    const downloadUrl = `${playableUrl}&dl=1`;
+    // 视频 CDN 直链直接对外，不套 /proxy 中转，避免 CF Worker 成为瓶颈导致加载慢
+    // B 站视频 CDN 没有 IP 封锁，可以直连；只有 API 请求才需要走 Vercel 代理
+    const playableUrl = videoStream.url;
+    const downloadUrl = `${host}/proxy?url=${encodeURIComponent(videoStream.url)}&name=${encodeURIComponent(title)}&dl=1`;
 
     return { title, pic, bvid, author: owner.name, playableUrl, downloadUrl, quality: videoStream.quality, isLive: false };
 }
