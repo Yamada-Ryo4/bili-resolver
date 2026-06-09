@@ -1,10 +1,12 @@
 /**
- * Bilibili Resolver & Proxy Worker (v3.2)
+ * Bilibili Resolver & Proxy Worker
  * 
  * 双模式界面：视频 / 直播 切换
  * - 视频：原版逻辑 (1080P/720P/480P, Quest模式, 历史记录)
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
+
+const VERSION = '20260609-001'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -725,6 +727,9 @@ export default {
 
         if (path === '/proxy') return handleProxy(request, url, host);
         if (path === '/' || path === '') return new Response(UI(host), { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
+
+        // 版本探针：用于确认 CF Worker 是否已部署最新代码
+        if (path === '/v') return new Response(JSON.stringify({ version: VERSION }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
 
         // /BVxxxxxx 直链入口 → 302 跳转到视频下载直链
         const bvDirectMatch = path.match(/^\/(BV[a-zA-Z0-9]{10})$/i);
