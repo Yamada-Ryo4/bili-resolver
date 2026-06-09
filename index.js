@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-015'; // 每次 push 时更新此版本号
+const VERSION = '20260609-016'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -373,15 +373,18 @@ async function resolveLive(roomId, host) {
     if (!result) result = await fetchStreamV2();
     if (!result) throw new Error("获取直播流失败");
 
+    // 直播流使用混合代理模式：
+    // m3u8 播放列表文件由 CF Worker 代理请求（解决无插件时跨域/Referer 拦截问题）
+    // m3u8 内的 ts 视频切片被替换为直连 CDN 地址（绕过 CF IP 被 B 站 ov 等节点拦截限速的问题）
+    const playableUrl = `${host}/proxy?url=${encodeURIComponent(result.url)}&live=1&m3u8_direct=1`;
     const isHLS = result.url.includes('.m3u8');
     const formatStr = `${isHLS ? 'HLS' : 'FLV'} (${result.nodeType})`;
-    const proxyUrl = `${host}/proxy?url=${encodeURIComponent(result.url)}`;
 
     return {
         title,
         pic: user_cover || keyframe,
         author: `UID:${uid}`,
-        playableUrl: proxyUrl,
+        playableUrl,
         downloadUrl: result.url,
         quality: 0,
         isLive: true,
@@ -479,7 +482,7 @@ const UI = (host) => `
                         <h3 id="resTitle" class="font-bold text-sm truncate text-white"></h3>
                         <p id="resAuthor" class="text-xs text-slate-400"></p>
                         <div class="flex gap-2 mt-2">
-                            <span id="resFormat" class="text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-300 font-mono"></span>
+                            <span id="resTag" class="text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-300 font-mono"></span>
                             <span id="resQuality" class="text-[10px] bg-blue-900/50 text-blue-300 px-2 py-1 rounded font-mono"></span>
                         </div>
                     </div>
@@ -488,8 +491,8 @@ const UI = (host) => `
                 <video id="player" controls class="w-full mt-4 rounded-xl hidden bg-black"></video>
 
                 <div class="flex gap-2 mt-4">
-                    <button id="btnPreview" onclick="playPreview()" class="flex-1 flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">👀 网页内播放</button>
-                    <button onclick="copyUrl()" class="flex-1 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 py-3 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 transition transform hover:-translate-y-0.5">📋 复制直链</button>
+                    <a id="btnPreview" href="#" onclick="playPreview(event)" class="flex-1 flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">👀 网页内播放</a>
+                    <a id="btnDownload" href="#" class="flex-1 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 py-3 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 transition transform hover:-translate-y-0.5 text-center">📋 复制直链</a>
                 </div>
             </div>
         </div>
@@ -542,7 +545,8 @@ const UI = (host) => `
             setTimeout(() => t.classList.remove('show'), 2500);
         }
 
-        function playPreview() {
+        function playPreview(e) {
+            e.preventDefault();
             if (!currentPlayableUrl) return;
             const video = document.getElementById('player');
             video.classList.remove('hidden');
@@ -567,8 +571,6 @@ const UI = (host) => `
                 video.play();
             }
         }
-
-        function copyUrl() { navigator.clipboard.writeText(currentPlayableUrl); showToast('直链已复制'); }
 
         function loadHistory() {
             const h = JSON.parse(localStorage.getItem('bili_history') || '[]');
@@ -628,9 +630,6 @@ const UI = (host) => `
                 const data = await res.json();
                 if (data.status === 'success') {
                     showResult(data, false);
-                    if (data.nodeType === 'OV') {
-                        showToast('⚠️ OV 节点可能无法播放，请重试', true);
-                    }
                 } else showToast(data.message);
             } catch (e) { showToast('请求失败'); } 
             finally { document.getElementById('loader').classList.add('hidden'); }
@@ -638,32 +637,29 @@ const UI = (host) => `
 
         function showResult(data, isQuest) {
             const pic = data.pic.replace('http:', 'https:');
+            currentPlayableUrl = data.playableUrl;
+            isCurrentLive = data.isLive;
             document.getElementById('resPic').src = pic;
             document.getElementById('bg-cover').style.backgroundImage = \`url('\${pic}')\`;
             document.getElementById('bg-cover').style.opacity = '0.4';
             document.getElementById('resTitle').innerText = data.title;
+            document.getElementById('resAuthor').innerText = data.author;
             
             const tag = document.getElementById('resTag');
             const qn = document.getElementById('resQuality');
             const btnDl = document.getElementById('btnDownload');
-            const link = document.getElementById('link');
             
             if (data.isLive) {
                 tag.innerText = 'LIVE';
                 tag.className = 'text-[10px] bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded font-bold uppercase';
                 qn.innerText = data.format;
-                link.value = data.downloadUrl;  // 直播显示原始直链
-                document.getElementById('btnPreview').href = data.downloadUrl;  // 直播预览也用直链
                 btnDl.innerText = '复制直链';
-                btnDl.href = '#';
                 btnDl.onclick = (e) => { e.preventDefault(); navigator.clipboard.writeText(data.downloadUrl); showToast('直链已复制'); };
             } else {
                 tag.innerText = 'VIDEO';
                 tag.className = 'text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded font-bold uppercase';
                 const qnMap = { 116: '1080P+', 80: '1080P', 64: '720P', 32: '480P' };
                 qn.innerText = isQuest ? 'Quest' : (qnMap[data.quality] || 'MP4');
-                link.value = data.playableUrl;
-                document.getElementById('btnPreview').href = data.playableUrl;
                 btnDl.innerText = '下载';
                 btnDl.href = data.downloadUrl;
                 btnDl.onclick = null;
@@ -681,6 +677,8 @@ async function handleProxy(request, url, host) {
     const target = url.searchParams.get('url');
     const name = url.searchParams.get('name');
     const isDownload = url.searchParams.get('dl') === '1';
+    const isLive = url.searchParams.get('live') === '1' || target.includes('live-bvc');
+    const m3u8Direct = url.searchParams.get('m3u8_direct') === '1';
 
     if (!target) return new Response('Missing URL', { status: 400 });
     try {
@@ -691,13 +689,11 @@ async function handleProxy(request, url, host) {
     } catch (e) { return new Response('Invalid URL', { status: 400 }); }
 
     const isM3u8 = target.includes('.m3u8');
-    const isLive = target.includes('live-bvc') || isM3u8;
 
-    const newHeaders = new Headers({
-        'Referer': isLive ? LIVE_REFERER : REFERER,
-        'User-Agent': isLive ? UA_MOBILE : UA,
-        'Origin': isLive ? 'https://live.bilibili.com' : 'https://www.bilibili.com'
-    });
+    const newHeaders = new Headers(request.headers);
+    newHeaders.set('Referer', isLive ? LIVE_REFERER : REFERER);
+    newHeaders.set('User-Agent', isLive ? UA_MOBILE : UA);
+    newHeaders.set('Origin', isLive ? 'https://live.bilibili.com' : 'https://www.bilibili.com');
     
     // 转发部分请求头，但不转发 If-Modified-Since 等缓存校验头，强制 B 站返回 206 或 200，从根本上避开 304 报错问题
     const forwardHeaders = ['Range', 'If-Range', 'If-Match'];
