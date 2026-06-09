@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-017'; // 每次 push 时更新此版本号
+const VERSION = '20260609-018'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -373,9 +373,10 @@ async function resolveLive(roomId, host) {
     if (!result) result = await fetchStreamV2();
     if (!result) throw new Error("获取直播流失败");
 
-    // 直播流直接使用 CDN 原始直连地址
-    // 配合全站 <meta name="referrer" content="no-referrer">，测试 B 站 CDN 是否允许空 Referer 播放
-    const playableUrl = result.url;
+    // 直播流使用 Vercel + CF 混合代理：
+    // m3u8 播放列表通过 Vercel 代理获取（绕过 CF IP 被 ov 节点拦截），ts 切片直连 CDN
+    // 配合 <meta name="referrer" content="no-referrer"> 测试空 Referer
+    const playableUrl = `${host}/proxy?url=${encodeURIComponent(result.url)}&live=1&m3u8_direct=1`;
     const isHLS = result.url.includes('.m3u8');
     const formatStr = `${isHLS ? 'HLS' : 'FLV'} (${result.nodeType})`;
 
