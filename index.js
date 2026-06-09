@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-023'; // 每次 push 时更新此版本号
+const VERSION = '20260609-024'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -671,10 +671,9 @@ async function handleProxy(request, url, host) {
     }
 
     try {
-        // signal: request.signal 确保用户拖动进度条取消旧请求时，CF Worker 立刻断开与 B 站 CDN 的连接
         // Accept-Encoding: identity 避免 CF 压缩导致串流卡顿
         newHeaders.set('Accept-Encoding', 'identity');
-        const response = await fetch(target, { headers: newHeaders, signal: request.signal });
+        const response = await fetch(target, { headers: newHeaders });
 
         // 只拦截真正的服务器错误；206 Partial Content 、416 Range Not Satisfiable 等与 Range 请求相关的状态码必须透传给浏览器，否则浏览器会认为代理崩溃而拤弃 seek
         if (response.status >= 500) {
