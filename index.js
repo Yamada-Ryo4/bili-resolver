@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-009'; // 每次 push 时更新此版本号
+const VERSION = '20260609-010'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -658,8 +658,8 @@ async function handleProxy(request, url, host) {
         'Origin': isLive ? 'https://live.bilibili.com' : 'https://www.bilibili.com'
     });
     
-    // 转发所有与断点续传/缓存相关的请求头
-    const forwardHeaders = ['Range', 'If-Range', 'If-Match', 'If-None-Match', 'If-Modified-Since', 'If-Unmodified-Since'];
+    // 转发部分请求头，但不转发 If-Modified-Since 等缓存校验头，强制 B 站返回 206 或 200，从根本上避开 304 报错问题
+    const forwardHeaders = ['Range', 'If-Range', 'If-Match'];
     for (const h of forwardHeaders) {
         if (request.headers.has(h)) newHeaders.set(h, request.headers.get(h));
     }
@@ -696,17 +696,19 @@ async function handleProxy(request, url, host) {
         for (const h of headersToCopy) {
             if (response.headers.has(h)) responseHeaders.set(h, response.headers.get(h));
         }
+        
         // 必须 Expose 这些 Headers，否则前端浏览器或 VRChat 的播放器拿不到断点续传信息
         responseHeaders.set('Access-Control-Expose-Headers', headersToCopy.join(', '));
-        
         if (name && isDownload) {
             responseHeaders.set("Content-Disposition", `attachment; filename="${encodeURIComponent(name)}.mp4"`);
         }
 
-        // 关键修复：HTTP 304 Not Modified 和 204 No Content 不能携带 body，否则 CF Worker 会抛出内部异常 502
-        const body = (response.status === 204 || response.status === 304) ? null : response.body;
+        // 关键修复：HTTP 304 Not Modified 和 204 No Content 绝对不能携带 body（哪怕是 null 在某些 V8 版本也会报错）
+        if (response.status === 204 || response.status === 304) {
+            return new Response(undefined, { status: response.status, headers: responseHeaders });
+        }
 
-        return new Response(body, { status: response.status, headers: responseHeaders });
+        return new Response(response.body, { status: response.status, headers: responseHeaders });
     } catch (e) {
         return new Response(`Proxy Error: ${e.message}`, { status: 502 });
     }
