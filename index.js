@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-020'; // 每次 push 时更新此版本号
+const VERSION = '20260609-021'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -489,11 +489,9 @@ const UI = (host) => `
                     </div>
                 </div>
 
-                <video id="player" controls class="w-full mt-4 rounded-xl hidden bg-black"></video>
-
                 <div class="flex gap-2 mt-4">
-                    <a id="btnPreview" href="#" onclick="playPreview(event)" class="flex-1 flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">👀 网页内播放</a>
-                    <a id="btnDownload" href="#" class="flex-1 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 py-3 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 transition transform hover:-translate-y-0.5 text-center">📋 复制直链</a>
+                    <a id="btnPreview" href="#" target="_blank" class="flex-1 flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">👀 预览</a>
+                    <a id="btnDownload" href="#" class="flex-1 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 py-3 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 transition transform hover:-translate-y-0.5 text-center">⬇️ 下载</a>
                 </div>
             </div>
         </div>
@@ -513,7 +511,6 @@ const UI = (host) => `
         let currentMode = 'video';
         let currentPlayableUrl = '';
         let isCurrentLive = false;
-        let hlsPlayer = null;
 
         function setMode(mode) {
             currentMode = mode;
@@ -527,13 +524,6 @@ const UI = (host) => `
             document.getElementById('videoPanel').style.display = mode === 'video' ? 'block' : 'none';
             document.getElementById('livePanel').style.display = mode === 'live' ? 'block' : 'none';
             document.getElementById('result').classList.add('hidden');
-            
-            if (hlsPlayer) {
-                hlsPlayer.destroy();
-                hlsPlayer = null;
-            }
-            document.getElementById('player').classList.add('hidden');
-            document.getElementById('player').src = '';
             document.getElementById('historyArea').classList.toggle('hidden', mode !== 'video' || !hasHistory());
         }
 
@@ -546,32 +536,6 @@ const UI = (host) => `
             setTimeout(() => t.classList.remove('show'), 2500);
         }
 
-        function playPreview(e) {
-            e.preventDefault();
-            if (!currentPlayableUrl) return;
-            const video = document.getElementById('player');
-            video.classList.remove('hidden');
-            
-            if (isCurrentLive || currentPlayableUrl.includes('.m3u8')) {
-                if (Hls.isSupported()) {
-                    if (hlsPlayer) hlsPlayer.destroy();
-                    hlsPlayer = new Hls();
-                    hlsPlayer.loadSource(currentPlayableUrl);
-                    hlsPlayer.attachMedia(video);
-                    hlsPlayer.on(Hls.Events.MANIFEST_PARSED, function() {
-                        video.play();
-                    });
-                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                    video.src = currentPlayableUrl;
-                    video.play();
-                } else {
-                    showToast('您的浏览器不支持 HLS 播放', 'warn');
-                }
-            } else {
-                video.src = currentPlayableUrl;
-                video.play();
-            }
-        }
 
         function loadHistory() {
             const h = JSON.parse(localStorage.getItem('bili_history') || '[]');
@@ -650,11 +614,14 @@ const UI = (host) => `
             const qn = document.getElementById('resQuality');
             const btnDl = document.getElementById('btnDownload');
             
+            const btnPreview = document.getElementById('btnPreview');
+            btnPreview.href = data.playableUrl;
             if (data.isLive) {
                 tag.innerText = 'LIVE';
                 tag.className = 'text-[10px] bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded font-bold uppercase';
                 qn.innerText = data.format;
                 btnDl.innerText = '复制直链';
+                btnDl.href = '#';
                 btnDl.onclick = (e) => { e.preventDefault(); navigator.clipboard.writeText(data.downloadUrl); showToast('直链已复制'); };
             } else {
                 tag.innerText = 'VIDEO';
