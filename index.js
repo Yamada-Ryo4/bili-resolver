@@ -729,7 +729,11 @@ export default {
         if (path === '/' || path === '') return new Response(UI(host), { headers: { 'Content-Type': 'text/html;charset=UTF-8' } });
 
         // 版本探针：用于确认 CF Worker 是否已部署最新代码
-        if (path === '/v') return new Response(JSON.stringify({ version: VERSION }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+        if (path === '/v') return new Response(JSON.stringify({
+            version: VERSION,
+            VERCEL_PROXY: WORKER_ENV.VERCEL_PROXY ? '✅ 已配置' : '❌ 未配置',
+            PROXY_TOKEN: WORKER_ENV.PROXY_TOKEN ? '✅ 已配置' : '❌ 未配置',
+        }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
 
         // /BVxxxxxx 直链入口 → 302 跳转到视频下载直链
         const bvDirectMatch = path.match(/^\/(BV[a-zA-Z0-9]{10})$/i);
