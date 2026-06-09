@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-021'; // 每次 push 时更新此版本号
+const VERSION = '20260609-022'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -670,17 +670,18 @@ async function handleProxy(request, url, host) {
     }
 
     try {
-        // 关键修复：必须传递 signal: request.signal
-        // 当用户拖动进度条导致浏览器取消旧请求时，CF Worker 会立即切断与 B 站 CDN 的上游连接，彻底消灭僵尸连接！
-        // 同时强制 Accept-Encoding: identity 避免 CF 尝试压缩导致卡顿
+        // signal: request.signal 确保用户拖动进度条取消旧请求时，CF Worker 立刻断开与 B 站 CDN 的连接
+        // Accept-Encoding: identity 避免 CF 压缩导致串流卡顿
         newHeaders.set('Accept-Encoding', 'identity');
         const response = await fetch(target, { headers: newHeaders, signal: request.signal });
-        if (!response.ok) {
-            return new Response(`CDN Error: ${response.status}`, { status: response.status });
+
+        // 只拦截真正的服务器错误；206 Partial Content 、416 Range Not Satisfiable 等与 Range 请求相关的状态码必须透传给浏览器，否则浏览器会认为代理崩溃而拤弃 seek
+        if (response.status >= 500) {
+            return new Response('CDN Error: ' + response.status, { status: response.status });
         }
 
         const responseHeaders = new Headers();
-        responseHeaders.set("Access-Control-Allow-Origin", "*");
+        responseHeaders.set('Access-Control-Allow-Origin', '*');
 
         if (isM3u8) {
             let m3u8Content = await response.text();
@@ -715,7 +716,9 @@ async function handleProxy(request, url, host) {
 
         return new Response(response.body, { status: response.status, headers: responseHeaders });
     } catch (e) {
-        return new Response(`Proxy Error: ${e.message}`, { status: 502 });
+        // AbortError 是用户拖动进度条时浏览器主动取消的正常行为，不要返回 502 口吹浏览器
+        if (e.name === 'AbortError') return new Response(null, { status: 499 });
+        return new Response('Proxy Error: ' + e.message, { status: 502 });
     }
 }
 
