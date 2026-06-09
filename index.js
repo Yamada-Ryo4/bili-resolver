@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-010'; // 每次 push 时更新此版本号
+const VERSION = '20260609-011'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -746,18 +746,37 @@ export default {
             PROXY_TOKEN: WORKER_ENV.PROXY_TOKEN ? '✅ 已配置' : '❌ 未配置',
         }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
 
-        // /BVxxxxxx 直链入口 → 302 跳转到视频下载直链
-        const bvDirectMatch = path.match(/^\/(BV[a-zA-Z0-9]{10})$/i);
-        if (bvDirectMatch) {
-            const qn = parseInt(url.searchParams.get('qn')) || 80;
-            try {
-                const res = await resolveVideo(bvDirectMatch[1], qn, host);
-                return Response.redirect(res.downloadUrl, 302);
-            } catch (e) {
-                const message = (e instanceof AntiCrawlError || e.name === 'AntiCrawlError') ? ANTI_CRAWL_MSG : e.message;
-                return new Response(JSON.stringify({ status: 'error', message }), {
-                    status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-                });
+        // 全局文案/链接直连入口：支持在域名后直接粘贴 B 站分享文案或链接（包含 BV 或 b23.tv 短链）
+        // 例如：https://bili.yamadaryo.me/【xxx】https://www.bilibili.com/video/BV1...
+        const decodedPath = decodeURIComponent(path);
+        const bvMatch = decodedPath.match(/(BV[a-zA-Z0-9]{10})/i);
+        const b23Match = decodedPath.match(/b23\.tv\/([a-zA-Z0-9]+)/i);
+
+        if (!path.startsWith('/api/') && !path.startsWith('/proxy') && !path.startsWith('/v') && path !== '/') {
+            if (bvMatch || b23Match) {
+                let finalBvid = bvMatch ? bvMatch[1] : null;
+                if (b23Match && !finalBvid) {
+                    try {
+                        const res = await fetch(`https://b23.tv/${b23Match[1]}`, { method: 'GET', redirect: 'manual' });
+                        if (res.status >= 300 && res.status < 400) {
+                            const loc = res.headers.get('location');
+                            finalBvid = loc?.match(/(BV[a-zA-Z0-9]{10})/i)?.[1];
+                        }
+                    } catch (e) {}
+                }
+
+                if (finalBvid) {
+                    const qn = parseInt(url.searchParams.get('qn')) || 80;
+                    try {
+                        const res = await resolveVideo(finalBvid, qn, host);
+                        return Response.redirect(res.downloadUrl, 302);
+                    } catch (e) {
+                        const message = (e instanceof AntiCrawlError || e.name === 'AntiCrawlError') ? ANTI_CRAWL_MSG : e.message;
+                        return new Response(JSON.stringify({ status: 'error', message }), {
+                            status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+                        });
+                    }
+                }
             }
         }
 
