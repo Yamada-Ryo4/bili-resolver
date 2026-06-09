@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-024'; // 每次 push 时更新此版本号
+const VERSION = '20260609-025'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -664,8 +664,8 @@ async function handleProxy(request, url, host) {
         'Origin': isLive ? 'https://live.bilibili.com' : 'https://www.bilibili.com'
     });
     
-    // 转发部分请求头，但不转发 If-Modified-Since 等缓存校验头，强制 B 站返回 206 或 200，从根本上避开 304 报错问题
-    const forwardHeaders = ['Range', 'If-Range', 'If-Match'];
+    // 只转发 Range 请求头。绝对不能转发 If-Range 或 If-Match，因为 CF 会修改 ETag，导致 B 站 CDN 校验失败从而忽略 Range 返回 200 全量视频
+    const forwardHeaders = ['Range'];
     for (const h of forwardHeaders) {
         if (request.headers.has(h)) newHeaders.set(h, request.headers.get(h));
     }
@@ -698,7 +698,8 @@ async function handleProxy(request, url, host) {
             return new Response(m3u8Content, { status: 200, headers: responseHeaders });
         }
 
-        const headersToCopy = ['Content-Type', 'Content-Length', 'Accept-Ranges', 'Content-Range', 'ETag', 'Last-Modified', 'Cache-Control'];
+        // 剔除 ETag 和 Last-Modified，避免浏览器在使用强缓存时发送错误的 If-Range
+        const headersToCopy = ['Content-Type', 'Content-Length', 'Accept-Ranges', 'Content-Range', 'Cache-Control'];
         for (const h of headersToCopy) {
             if (response.headers.has(h)) responseHeaders.set(h, response.headers.get(h));
         }
