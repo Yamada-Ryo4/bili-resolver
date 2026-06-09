@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-019'; // 每次 push 时更新此版本号
+const VERSION = '20260609-020'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -608,7 +608,7 @@ const UI = (host) => `
             document.getElementById('bg-cover').style.opacity = '0';
 
             try {
-                const res = await fetch(`\/api\/video?text=\${encodeURIComponent(input)}&qn=\${qn}`);
+                const res = await fetch('/api/video?text=' + encodeURIComponent(input) + '&qn=' + qn);
                 const data = await res.json();
                 if (data.status === 'success') {
                     showResult(data, isQuest);
@@ -627,7 +627,7 @@ const UI = (host) => `
             document.getElementById('bg-cover').style.opacity = '0';
 
             try {
-                const res = await fetch(`\/api\/live?room=\${encodeURIComponent(input)}`);
+                const res = await fetch('/api/live?room=' + encodeURIComponent(input));
                 const data = await res.json();
                 if (data.status === 'success') {
                     showResult(data, false);
@@ -641,7 +641,7 @@ const UI = (host) => `
             currentPlayableUrl = data.playableUrl;
             isCurrentLive = data.isLive;
             document.getElementById('resPic').src = pic;
-            document.getElementById('bg-cover').style.backgroundImage = `url(\'\${pic}\')`;
+            document.getElementById('bg-cover').style.backgroundImage = "url('" + pic + "')";
             document.getElementById('bg-cover').style.opacity = '0.4';
             document.getElementById('resTitle').innerText = data.title;
             document.getElementById('resAuthor').innerText = data.author;
