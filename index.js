@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-011'; // 每次 push 时更新此版本号
+const VERSION = '20260609-012'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -751,8 +751,18 @@ export default {
         const decodedPath = decodeURIComponent(path);
         const bvMatch = decodedPath.match(/(BV[a-zA-Z0-9]{10})/i);
         const b23Match = decodedPath.match(/b23\.tv\/([a-zA-Z0-9]+)/i);
+        const liveRoomMatch = decodedPath.match(/live\.bilibili\.com\/(\d+)/i);
 
         if (!path.startsWith('/api/') && !path.startsWith('/proxy') && !path.startsWith('/v') && path !== '/') {
+            if (liveRoomMatch) {
+                try {
+                    const res = await resolveLive(liveRoomMatch[1], host);
+                    return Response.redirect(res.downloadUrl, 302);
+                } catch (e) {
+                    return new Response(JSON.stringify({ status: 'error', message: e.message }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+            }
+
             if (bvMatch || b23Match) {
                 let finalBvid = bvMatch ? bvMatch[1] : null;
                 if (b23Match && !finalBvid) {
@@ -761,6 +771,11 @@ export default {
                         if (res.status >= 300 && res.status < 400) {
                             const loc = res.headers.get('location');
                             finalBvid = loc?.match(/(BV[a-zA-Z0-9]{10})/i)?.[1];
+                            const shortLiveMatch = loc?.match(/live\.bilibili\.com\/(\d+)/i);
+                            if (shortLiveMatch && !finalBvid) {
+                                const resLive = await resolveLive(shortLiveMatch[1], host);
+                                return Response.redirect(resLive.downloadUrl, 302);
+                            }
                         }
                     } catch (e) {}
                 }
