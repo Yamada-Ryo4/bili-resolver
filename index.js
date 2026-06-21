@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20260609-027'; // 每次 push 时更新此版本号
+const VERSION = '20260609-028'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -476,23 +476,25 @@ const UI = (host) => `
             <div id="loader" class="hidden py-8 text-center"><div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div></div>
 
             <!-- 结果 -->
-            <div id="result" class="hidden mt-6 bg-slate-900/80 rounded-2xl p-4 border border-slate-700/50">
-                <div class="flex gap-4">
-                    <img id="resPic" class="w-28 h-28 object-cover rounded-xl shadow-lg" src="">
-                    <div class="flex-1 min-w-0 flex flex-col justify-center space-y-1">
-                        <h3 id="resTitle" class="font-bold text-sm truncate text-white"></h3>
-                        <p id="resAuthor" class="text-xs text-slate-400"></p>
-                        <div class="flex gap-2 mt-2">
-                            <span id="resTag" class="text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-300 font-mono"></span>
-                            <span id="resQuality" class="text-[10px] bg-blue-900/50 text-blue-300 px-2 py-1 rounded font-mono"></span>
+            <div id="result" class="hidden space-y-4 pt-4 border-t border-white/5">
+                <div class="flex gap-4 items-start">
+                    <img id="resPic" referrerpolicy="no-referrer" class="w-28 h-16 object-cover rounded-lg shadow-md bg-slate-800 shrink-0">
+                    <div class="min-w-0 flex-1 space-y-1">
+                        <h3 id="resTitle" class="text-sm font-bold leading-tight line-clamp-2"></h3>
+                        <p id="resAuthor" class="text-[10px] text-slate-400 truncate"></p>
+                        <div class="flex items-center gap-2">
+                            <span id="resTag" class="text-[10px] bg-pink-500/20 text-pink-300 px-1.5 py-0.5 rounded font-bold uppercase">VIDEO</span>
+                            <span id="resQuality" class="text-[10px] bg-blue-500/20 text-blue-300 px-1.5 py-0.5 rounded">1080P</span>
                         </div>
                     </div>
                 </div>
-
-                <div class="flex gap-2 mt-4">
-                    <a id="btnPreview" href="#" target="_blank" class="flex-1 flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">预览</a>
-                    <button id="btnCopy" class="flex-1 bg-slate-800 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">📋 复制</button>
-                    <a id="btnDownload" href="#" class="flex-1 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-400 hover:to-indigo-500 py-3 rounded-xl text-sm font-bold shadow-lg shadow-blue-500/30 transition transform hover:-translate-y-0.5 text-center">⬇️ 下载</a>
+                <div class="relative">
+                    <input id="link" readonly class="w-full bg-slate-900/40 border border-slate-700/50 rounded-xl px-4 py-3 text-xs text-slate-300 outline-none font-mono tracking-tight">
+                    <button onclick="copyLink()" class="absolute right-2 top-2 bg-slate-700/50 hover:bg-slate-600 text-xs px-3 py-1 rounded-lg transition">复制</button>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <a id="btnPreview" target="_blank" class="flex items-center justify-center bg-slate-700/50 hover:bg-slate-700 py-3 rounded-xl text-sm font-bold transition">预览</a>
+                    <a id="btnDownload" href="#" class="flex items-center justify-center bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 py-3 rounded-xl text-sm font-bold shadow-lg transition transform hover:-translate-y-0.5 text-center">下载</a>
                 </div>
             </div>
         </div>
@@ -562,6 +564,11 @@ const UI = (host) => `
         function clearHistory() { localStorage.removeItem('bili_history'); loadHistory(); }
         loadHistory();
 
+        function copyLink() {
+            const link = document.getElementById('link').value;
+            if(link) { navigator.clipboard.writeText(link); showToast('已复制'); }
+        }
+
         async function parseVideo() {
             const input = document.getElementById('videoInput').value;
             const isQuest = document.getElementById('questMode').checked;
@@ -616,9 +623,8 @@ const UI = (host) => `
             const btnDl = document.getElementById('btnDownload');
             
             const btnPreview = document.getElementById('btnPreview');
-            const btnCopy = document.getElementById('btnCopy');
+            document.getElementById('link').value = data.playableUrl;
             btnPreview.href = data.playableUrl;
-            btnCopy.onclick = () => { navigator.clipboard.writeText(data.playableUrl); showToast('解析链接已复制'); };
             if (data.isLive) {
                 tag.innerText = 'LIVE';
                 tag.className = 'text-[10px] bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded font-bold uppercase';
