@@ -1,5 +1,6 @@
 name = "bili-resolver"
 main = "index.js"
+account_id = "5016a2189c17a6141641fdd988b98008"
 compatibility_date = "2026-01-24"
 
 [placement]

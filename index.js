@@ -477,6 +477,7 @@ const UI = (host) => `
 
             <!-- 结果 -->
             <div id="result" class="hidden space-y-4 pt-4 border-t border-white/5">
+                <video id="inlineVideo" class="hidden w-full rounded-xl bg-black" controls playsinline></video>
                 <div class="flex gap-4 items-start">
                     <img id="resPic" referrerpolicy="no-referrer" class="w-28 h-16 object-cover rounded-lg shadow-md bg-slate-800 shrink-0">
                     <div class="min-w-0 flex-1 space-y-1">
@@ -514,6 +515,11 @@ const UI = (host) => `
         let currentMode = 'video';
         let currentPlayableUrl = '';
         let isCurrentLive = false;
+        const PREFETCH_WINDOW_SIZE = 10;
+        let hlsPreview = null;
+        let seekAbortController = null;
+        let levelFragments = new Map();
+        let seekGeneration = 0;
 
         function setMode(mode) {
             currentMode = mode;
@@ -608,6 +614,33 @@ const UI = (host) => `
             finally { document.getElementById('loader').classList.add('hidden'); }
         }
 
+        function getPreviewUrl(data) { return data.playableUrl; }
+        function startInlinePreview(url) {
+            const video = document.getElementById('inlineVideo');
+            video.classList.remove('hidden');
+            if (hlsPreview) { hlsPreview.destroy(); hlsPreview = null; }
+            if (!window.Hls || !Hls.isSupported()) { video.src = url; return; }
+            hlsPreview = new Hls({ enableWorker: true, startLevel: 0, autoStartLoad: true, maxBufferLength: 45, maxMaxBufferLength: 90, backBufferLength: 60, fragLoadingMaxRetry: 4, fragLoadingRetryDelay: 500 });
+            hlsPreview.loadSource(url);
+            hlsPreview.attachMedia(video);
+            hlsPreview.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
+                const fragments = (data.details?.fragments || []).map(f => ({ start: f.start, duration: f.duration, url: f.url }));
+                if (fragments.length) levelFragments.set(data.level, fragments);
+            });
+            const prefetch = (time) => {
+                if (seekAbortController) seekAbortController.abort();
+                seekAbortController = new AbortController();
+                const fragments = Array.from(levelFragments.values())[0] || [];
+                let index = fragments.findIndex(f => f.start <= time && time < f.start + f.duration);
+                if (index < 0) index = fragments.findIndex(f => f.start >= time);
+                if (index < 0) index = fragments.length - 1;
+                const selected = fragments.slice(index, index + PREFETCH_WINDOW_SIZE);
+                Promise.allSettled(selected.map(f => fetch(f.url, { cache: 'force-cache', signal: seekAbortController.signal }))).catch(() => {});
+            };
+            video.addEventListener('seeking', () => { hlsPreview.stopLoad(); hlsPreview.startLoad(video.currentTime); prefetch(video.currentTime); });
+            hlsPreview.on(Hls.Events.ERROR, (_event, detail) => { if (detail.fatal && detail.type === Hls.ErrorTypes.NETWORK_ERROR) { hlsPreview.stopLoad(); hlsPreview.startLoad(video.currentTime); } });
+        }
+
         function showResult(data, isQuest) {
             const pic = data.pic.replace('http:', 'https:');
             currentPlayableUrl = data.playableUrl;
@@ -625,6 +658,9 @@ const UI = (host) => `
             const btnPreview = document.getElementById('btnPreview');
             document.getElementById('link').value = data.playableUrl;
             btnPreview.href = data.playableUrl;
+            if (!data.isLive) {
+                btnPreview.onclick = (event) => { event.preventDefault(); startInlinePreview(getPreviewUrl(data)); };
+            }
             if (data.isLive) {
                 tag.innerText = 'LIVE';
                 tag.className = 'text-[10px] bg-red-500/20 text-red-300 px-1.5 py-0.5 rounded font-bold uppercase';
@@ -654,10 +690,9 @@ async function handleProxy(request, url, host) {
     const target = url.searchParams.get('url');
     const name = url.searchParams.get('name');
     const isDownload = url.searchParams.get('dl') === '1';
+    if (!target) return new Response('Missing URL', { status: 400 });
     const isLive = url.searchParams.get('live') === '1' || target.includes('live-bvc');
     const m3u8Direct = url.searchParams.get('m3u8_direct') === '1';
-
-    if (!target) return new Response('Missing URL', { status: 400 });
     try {
         const targetUrl = new URL(target);
         if (!targetUrl.hostname.includes('bilivideo') && !targetUrl.hostname.includes('hdslb') && !targetUrl.hostname.includes('akamaized')) {
@@ -682,15 +717,22 @@ async function handleProxy(request, url, host) {
     try {
         // Accept-Encoding: identity 避免 CF 压缩导致串流卡顿
         newHeaders.set('Accept-Encoding', 'identity');
-        const response = await fetch(target, { headers: newHeaders });
-
-        // 只拦截真正的服务器错误；206 Partial Content 、416 Range Not Satisfiable 等与 Range 请求相关的状态码必须透传给浏览器，否则浏览器会认为代理崩溃而拤弃 seek
-        if (response.status >= 500) {
-            return new Response('CDN Error: ' + response.status, { status: response.status });
+        let response;
+        for (let attempt = 1; attempt <= 3; attempt += 1) {
+            if (attempt > 1) {
+                newHeaders.set('Cache-Control', 'no-cache');
+                newHeaders.set('X-Proxy-Retry', String(attempt));
+            }
+            response = await fetch(target, { headers: newHeaders, cf: { cacheEverything: false } });
+            if (response.status < 500 && response.status !== 403 && response.status !== 429) break;
+            try { await response.body?.cancel(); } catch (e) {}
+            await new Promise(resolve => setTimeout(resolve, attempt * 150));
         }
 
         const responseHeaders = new Headers();
         responseHeaders.set('Access-Control-Allow-Origin', '*');
+        responseHeaders.set('Access-Control-Expose-Headers', 'Content-Type, Content-Length, Content-Range, Accept-Ranges, Cache-Control');
+        responseHeaders.set('Cache-Control', response.ok ? 'public, max-age=86400, immutable' : 'no-store');
 
         if (isM3u8) {
             let m3u8Content = await response.text();
@@ -799,7 +841,7 @@ export default {
                 }
 
                 if (finalBvid) {
-                    const qn = parseInt(url.searchParams.get('qn')) || 80;
+                    const qn = parseInt(url.searchParams.get('qn')) || 116;
                     try {
                         const res = await resolveVideo(finalBvid, qn, host);
                         return Response.redirect(res.downloadUrl, 302);
@@ -816,7 +858,7 @@ export default {
         // 视频 API
         if (path === '/api/video') {
             let text = url.searchParams.get('text');
-            const qn = parseInt(url.searchParams.get('qn')) || 80;
+            const qn = parseInt(url.searchParams.get('qn')) || 116;
             if (!text) return new Response(JSON.stringify({ status: 'error', message: 'Missing text' }), { status: 400 });
 
             // 尝试解析 b23.tv 短链
