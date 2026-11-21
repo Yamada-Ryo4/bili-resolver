@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20261003-008'; // 每次 push 时更新此版本号
+const VERSION = '20261003-009'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -1066,6 +1066,107 @@ function unescapeDanmakuText(text) {
         .replace(/&amp;/g, '&');
 }
 
+// --- 百度 cloudnproxy 隧道（免费静态中国出口，用于 seg.so 明文拉取） ---
+// Workers 的 fetch 无法使用 CONNECT 代理，但 TCP sockets API 可以：
+// connect() 到百度入口（明文 HTTP 代理，443 端口非 TLS），手写 CONNECT 头建立隧道，
+// 隧道内对 api.bilibili.com:80 发明文 GET（dm seg.so 是少数 80 端口不跳 https 的端点）。
+let socketsConnect = null;
+try {
+    socketsConnect = (await import("cloudflare:sockets")).connect;
+} catch (e) { socketsConnect = null; } // Node 测试环境没有该模块，静默走既有矩阵
+
+const BAIDU_ENTRIES = [
+    "180.101.50.208", "180.101.50.249",   // 南京电信
+    "157.0.146.158",                      // 苏州联通
+    "220.181.111.189", "220.181.33.174", "220.181.7.1", // 北京电信
+    "110.242.70.68", "110.242.70.69",     // 保定联通
+    "163.177.17.189", "163.177.17.6",     // 广州联通
+    "183.240.98.84",                      // 广州移动
+    "36.155.169.188",                     // 南京移动
+    "14.215.182.75",                      // 广州电信
+];
+const BAIDU_AUTH = "1951164069";
+const BAIDU_UA = "okhttp/3.11.0 SP-engine/2.71.0 Dalvik/2.1.0 (Linux; U; Android 9; HMA-AL00 Build/PQ3B.190801.002) baiduboxapp/13.33.0.11 (Baidu; P1 9)";
+
+// 响应体若为 chunked 编码则还原
+function dechunkBytes(body) {
+    let out = [];
+    let p = 0;
+    while (p < body.length) {
+        let lineEnd = -1;
+        for (let i = p; i < body.length - 1; i += 1) {
+            if (body[i] === 13 && body[i + 1] === 10) { lineEnd = i; break; }
+        }
+        if (lineEnd < 0) break;
+        const size = parseInt(new TextDecoder().decode(body.slice(p, lineEnd)).split(";")[0], 16);
+        if (!Number.isFinite(size) || size <= 0) break;
+        const start = lineEnd + 2;
+        if (start + size > body.length) break;
+        out.push(body.slice(start, start + size));
+        p = start + size + 2;
+    }
+    const total = out.reduce((a, c) => a + c.length, 0);
+    const full = new Uint8Array(total);
+    let off = 0;
+    for (const c of out) { full.set(c, off); off += c.length; }
+    return full;
+}
+
+// 经百度入口建 CONNECT 隧道，在隧道内对目标 host:port 发明文 HTTP 请求并读完整响应
+async function baiduTunnelHttp(targetHost, targetPort, requestText, maxBytes) {
+    if (!socketsConnect) throw new Error("sockets unavailable");
+    let lastErr = null;
+    for (const entry of BAIDU_ENTRIES) {
+        let socket;
+        try {
+            socket = socketsConnect({ hostname: entry, port: 443 });
+            const w = socket.writable.getWriter();
+            await w.write(new TextEncoder().encode("CONNECT " + targetHost + ":" + targetPort + " HTTP/1.1\r\nHost: ascdn.baidu.com\r\nX-T5-Auth: " + BAIDU_AUTH + "\r\nUser-Agent: " + BAIDU_UA + "\r\n\r\n"));
+            const r = socket.readable.getReader();
+            const dec = new TextDecoder();
+            let head = "";
+            while (!head.includes("\r\n\r\n")) {
+                const { value, done } = await r.read();
+                if (done) throw new Error("proxy closed during CONNECT");
+                head += dec.decode(value, { stream: true });
+                if (head.length > 4096) throw new Error("CONNECT head too large");
+            }
+            if (!/ 200 /.test(head.split("\r\n")[0])) throw new Error("CONNECT " + head.split("\r\n")[0]);
+            r.releaseLock();
+            w.releaseLock();
+            const wr = socket.writable.getWriter();
+            await wr.write(new TextEncoder().encode(requestText));
+            const rd = socket.readable.getReader();
+            const chunks = [];
+            let total = 0;
+            const cap = maxBytes || 1048576;
+            while (total < cap) {
+                const { value, done } = await rd.read();
+                if (done) break;
+                chunks.push(value);
+                total += value.length;
+            }
+            try { await socket.close(); } catch (e) {}
+            const full = new Uint8Array(total);
+            let off = 0;
+            for (const c of chunks) { full.set(c, off); off += c.length; }
+            let headEnd = -1;
+            for (let i = 0; i < full.length - 3; i += 1) {
+                if (full[i] === 13 && full[i + 1] === 10 && full[i + 2] === 13 && full[i + 3] === 10) { headEnd = i; break; }
+            }
+            if (headEnd < 0) throw new Error("no http head");
+            const headText = new TextDecoder().decode(full.slice(0, headEnd));
+            let body = full.slice(headEnd + 4);
+            if (/transfer-encoding:\s*chunked/i.test(headText)) body = dechunkBytes(body);
+            return { entry: entry, status: headText.split("\r\n")[0], body: body };
+        } catch (e) {
+            lastErr = e;
+            try { if (socket) await socket.close(); } catch (e2) {}
+        }
+    }
+    throw lastErr || new Error("baidu tunnel failed");
+}
+
 const MAX_DANMAKU_SEGMENTS = 40;
 
 // VRChat VRCStringDownloader / VRCHttpClient 的响应大小上限约 1MB：
@@ -1156,16 +1257,39 @@ async function resolveBarrage(bvid, page, debug) {
         const indexes = [];
         for (let i = start; i < start + batchSize && i <= segments; i += 1) indexes.push(i);
         const buffers = await Promise.all(indexes.map(async (i) => {
+            // 主通道：百度隧道明文拉 seg.so（免费静态中国出口）
+            if (socketsConnect) {
+                try {
+                    const reqText = "GET /x/v2/dm/web/seg.so?type=1&oid=" + cid + "&pid=0&segment_index=" + i + " HTTP/1.1\r\nHost: api.bilibili.com\r\nUser-Agent: " + UA + "\r\nReferer: " + REFERER + "\r\nCookie: " + (headers.Cookie || "") + "\r\nConnection: close\r\n\r\n";
+                    const out = await Promise.race([
+                        baiduTunnelHttp("api.bilibili.com", 80, reqText, 1048576),
+                        new Promise((_, rej) => setTimeout(() => rej(new Error("baidu tunnel timeout")), 8000)),
+                    ]);
+                    if (/ 200 /.test(out.status) && out.body && out.body.length) {
+                        if (debug && i === indexes[0]) debug.push({ segment: i, via: "baidu:" + out.entry, status: 200, bytes: out.body.length });
+                        const elemsSeg = parseDanmakuElems(out.body);
+                        return { elems: elemsSeg };
+                    }
+                    if (debug && i === indexes[0]) debug.push({ segment: i, via: "baidu", status: out.status, bytes: out.body ? out.body.length : 0 });
+                } catch (e) {
+                    if (debug && i === indexes[0]) debug.push({ segment: i, via: "baidu", fatal: String(e.message || e).slice(0, 60) });
+                }
+            }
+            // 备用：既有矩阵（EO 直连 → blue 代理 → 官方域名）
             try {
                 const out = await fetchBiliBinary(biliApi(`/x/v2/dm/web/seg.so?type=1&oid=${cid}&pid=0&segment_index=${i}`), { headers });
-                if (debug && i === 1) debug.push({ segment: i, tried: out.tried });
-                return out.buf.length ? out.buf : null;
+                if (debug && i === indexes[0]) debug.push({ segment: i, via: "matrix", tried: out.tried });
+                return out.buf.length ? { buf: out.buf } : null;
             } catch (e) { return null; }
         }));
-        for (const buf of buffers) {
-            if (!buf) continue;
-            try { elems.push(...parseDanmakuElems(buf)); } catch (e) { /* 跳过坏段 */ }
+        for (const b of buffers) {
+            if (!b) continue;
+            if (b.elems) { elems.push(...b.elems); continue; }
+            if (b.buf) {
+                try { elems.push(...parseDanmakuElems(b.buf)); } catch (e) { /* 跳过坏段 */ }
+            }
         }
+
     }
 
     // 与 bil.ouo.chat 同款响应格式（简-BiliPlayer Udon 逐字段核对的 ground truth）：
