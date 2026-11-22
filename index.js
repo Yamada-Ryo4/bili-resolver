@@ -442,6 +442,7 @@ async function resolveVideo(bvid, qn, host) {
         throw new Error(ERROR_MAP[vData && vData.code] || (vData && vData.message) || '视频解析失败');
     }
 
+    if (vData.data.rights && vData.data.rights.pay === 1) throw new Error('该视频为B站付费内容，游客无法解析');
     const { cid, title, pic, owner } = vData.data;
     // 不在此预取 nav：nav 在数据中心 IP 上可能被风控，预取失败会阻断 APP/TV 取流线路。
     // 将 nav（mixin_key）的获取交给 getPlayUrlWithFallback 内部按需、容错地处理。
