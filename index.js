@@ -6,7 +6,7 @@
  * - 直播：v4.1 稳定版本 (CN/OV 节点检测)
  */
 
-const VERSION = '20261003-009'; // 每次 push 时更新此版本号
+const VERSION = '20261003-010'; // 每次 push 时更新此版本号
 
 const REFERER = 'https://www.bilibili.com/';
 const LIVE_REFERER = 'https://live.bilibili.com/';
@@ -1076,15 +1076,22 @@ try {
     socketsConnect = (await import("cloudflare:sockets")).connect;
 } catch (e) { socketsConnect = null; } // Node 测试环境没有该模块，静默走既有矩阵
 
+// 14 个静态入口，按实测延迟排序（2026-11-22 全量隧道实测）；末位为多数地区超时的广州电信边缘。
 const BAIDU_ENTRIES = [
-    "180.101.50.208", "180.101.50.249",   // 南京电信
-    "157.0.146.158",                      // 苏州联通
-    "220.181.111.189", "220.181.33.174", "220.181.7.1", // 北京电信
-    "110.242.70.68", "110.242.70.69",     // 保定联通
-    "163.177.17.189", "163.177.17.6",     // 广州联通
-    "183.240.98.84",                      // 广州移动
-    "36.155.169.188",                     // 南京移动
-    "14.215.182.75",                      // 广州电信
+    "180.101.50.249",                     // 南京电信 376ms
+    "36.155.169.188",                     // 南京移动 418ms
+    "153.3.237.117",                      // 南京联通 471ms
+    "180.101.50.208",                     // 南京电信 525ms
+    "220.181.7.1",                        // 北京电信 609ms
+    "157.0.146.158",                      // 苏州联通 612ms
+    "220.181.33.174",                     // 北京电信 676ms
+    "110.242.70.68",                      // 保定联通 731ms
+    "183.240.98.84",                      // 广州移动 1317ms
+    "163.177.17.6",                       // 广州联通 2024ms
+    "220.181.111.189",                    // 北京电信 2294ms
+    "163.177.17.189",                     // 广州联通 5201ms
+    "110.242.70.69",                      // 保定联通 7221ms
+    "14.215.182.75",                      // 广州电信（部分方向超时，兜底）
 ];
 const BAIDU_AUTH = "1951164069";
 const BAIDU_UA = "okhttp/3.11.0 SP-engine/2.71.0 Dalvik/2.1.0 (Linux; U; Android 9; HMA-AL00 Build/PQ3B.190801.002) baiduboxapp/13.33.0.11 (Baidu; P1 9)";
@@ -1117,7 +1124,10 @@ function dechunkBytes(body) {
 async function baiduTunnelHttp(targetHost, targetPort, requestText, maxBytes) {
     if (!socketsConnect) throw new Error("sockets unavailable");
     let lastErr = null;
-    for (const entry of BAIDU_ENTRIES) {
+    // 随机起点轮换：把负载摊到所有入口上，避免单入口被高频请求标记
+    const start = Math.floor(Math.random() * BAIDU_ENTRIES.length);
+    const rotated = BAIDU_ENTRIES.slice(start).concat(BAIDU_ENTRIES.slice(0, start));
+    for (const entry of rotated) {
         let socket;
         try {
             socket = socketsConnect({ hostname: entry, port: 443 });
